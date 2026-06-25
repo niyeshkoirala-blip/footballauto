@@ -1,0 +1,79 @@
+name: Auto Post Football News
+
+on:
+  schedule:
+    # ── Breaking-news polling: every 15 minutes ──────────────────────────────
+    # Runs main.py without --scheduled; only posts if a story scores ≥ BREAKING_THRESHOLD
+    - cron: "*/15 * * * *"
+
+    # ── Scheduled posts: 08:00, 14:00, 20:00 UTC ────────────────────────────
+    # These use --scheduled so they post the best new story regardless of score
+    - cron: "0 8  * * *"
+    - cron: "0 14 * * *"
+    - cron: "0 20 * * *"
+
+  # Trigger a post manually from GitHub → Actions tab
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode: 'breaking' or 'scheduled'"
+        required: false
+        default: "breaking"
+
+jobs:
+  post-news:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit posted_stories.json back
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Detect run mode
+        id: mode
+        run: |
+          # Scheduled runs at 08:00, 14:00, 20:00 get --scheduled flag
+          HOUR=$(date -u +%H)
+          MINUTE=$(date -u +%M)
+          MANUAL_MODE="${{ github.event.inputs.mode }}"
+          if [[ "$MANUAL_MODE" == "scheduled" ]] || \
+             { [[ "$MINUTE" == "00" ]] && [[ "$HOUR" == "08" || "$HOUR" == "14" || "$HOUR" == "20" ]]; }; then
+            echo "args=--scheduled" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run football news bot
+        env:
+          FB_EMAIL:            ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD:         ${{ secrets.FB_PASSWORD }}
+          FB_PAGE_URL:         ${{ secrets.FB_PAGE_URL }}
+          PEXELS_API_KEY:      ${{ secrets.PEXELS_API_KEY }}
+          GROQ_API_KEY:        ${{ secrets.GROQ_API_KEY }}
+          PAGE_NAME:           ${{ secrets.PAGE_NAME }}
+          POSTS_PER_RUN:       "1"
+          BREAKING_THRESHOLD:  "55"
+        run: python main.py ${{ steps.mode.outputs.args }}
+
+      # Persist the list of posted story IDs so we never repost
+      - name: Commit updated posted_stories.json
+        if: always()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add posted_stories.json
+          git diff --staged --quiet || git commit -m "chore: update posted stories [skip ci]"
+          git push
