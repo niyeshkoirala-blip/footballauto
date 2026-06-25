@@ -64,8 +64,10 @@ jobs:
           PEXELS_API_KEY:      ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:        ${{ secrets.GROQ_API_KEY }}
           PAGE_NAME:           ${{ secrets.PAGE_NAME }}
-          POSTS_PER_RUN:       "1"
+          POSTS_PER_RUN:       "15"
           BREAKING_THRESHOLD:  "55"
+          POST_DELAY_MIN:      "25"
+          POST_DELAY_MAX:      "35"
         run: python main.py ${{ steps.mode.outputs.args }}
 
       # Persist the list of posted story IDs so we never repost
