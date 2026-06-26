@@ -645,8 +645,10 @@ _MILESTONE_PHRASES: list[str] = [
 
 def score_story(title: str, description: str = "") -> int:
     """
-    Return a 0–100 significance score for the story.
-    Higher = more breaking / important.
+    Return an uncapped significance score for the story (minimum 0).
+    Higher = more breaking / important. No upper limit, so the most
+    keyword-rich stories rank distinctly above one-signal stories instead
+    of all tying at a 100 ceiling.
     """
     text = (title + " " + description).lower()
     score = 0
@@ -673,7 +675,7 @@ def score_story(title: str, description: str = "") -> int:
     if any(p in text for p in _MILESTONE_PHRASES):
         score += 15
 
-    return max(0, min(100, score))
+    return max(0, score)
 
 RSS_FEEDS = [
     {"url": "https://feeds.bbci.co.uk/sport/football/rss.xml",   "source": "BBC Sport"},
