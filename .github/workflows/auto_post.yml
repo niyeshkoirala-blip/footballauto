@@ -2,7 +2,7 @@ name: Auto Post Football News
 
 on:
   schedule:
-    # Every 30 minutes — posts the top 2 new stories regardless of score
+    # Every 30 minutes
     - cron: "*/30 * * * *"
 
   # Trigger manually from GitHub → Actions tab
@@ -25,25 +25,21 @@ jobs:
           cache: "pip"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          playwright install chromium
-          playwright install-deps chromium
+        run: pip install -r requirements.txt
 
       - name: Run football news bot
         env:
-          FB_EMAIL:            ${{ secrets.FB_EMAIL }}
-          FB_PASSWORD:         ${{ secrets.FB_PASSWORD }}
-          FB_PAGE_URL:         ${{ secrets.FB_PAGE_URL }}
-          PEXELS_API_KEY:      ${{ secrets.PEXELS_API_KEY }}
-          GROQ_API_KEY:        ${{ secrets.GROQ_API_KEY }}
-          PAGE_NAME:           ${{ secrets.PAGE_NAME }}
-          POSTS_PER_RUN:       "15"
-          MIN_POSTS_PER_RUN:   "2"
-          BREAKING_THRESHOLD:  "50"
-          POST_DELAY_MIN:      "25"
-          POST_DELAY_MAX:      "35"
-        run: python main.py --scheduled
+          MAKE_WEBHOOK_URL:       ${{ secrets.MAKE_WEBHOOK_URL }}
+          MAKE_REEL_WEBHOOK_URL:  ${{ secrets.MAKE_REEL_WEBHOOK_URL }}
+          PEXELS_API_KEY:         ${{ secrets.PEXELS_API_KEY }}
+          GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
+          PAGE_NAME:              ${{ secrets.PAGE_NAME }}
+          FB_PAGE_URL:            ${{ secrets.FB_PAGE_URL }}
+          POSTS_PER_RUN:          "15"
+          BREAKING_THRESHOLD:     "50"
+          POST_DELAY_MIN:         "25"
+          POST_DELAY_MAX:         "35"
+        run: python main.py
 
       # Persist the list of posted story IDs so we never repost
       - name: Commit updated posted_stories.json
