@@ -39,7 +39,7 @@ jobs:
           FB_PAGE_URL:            ${{ secrets.FB_PAGE_URL }}
           POSTS_PER_RUN:          "25"
           BREAKING_THRESHOLD:     "50"
-          POST_DELAY_MIN:         "25"
+          POST_DELAY_MIN:         "10"
           POST_DELAY_MAX:         "35"
         run: python main.py
         
