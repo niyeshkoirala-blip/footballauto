@@ -31,6 +31,7 @@ jobs:
         env:
           MAKE_WEBHOOK_URL:       ${{ secrets.MAKE_WEBHOOK_URL }}
           MAKE_REEL_WEBHOOK_URL:  ${{ secrets.MAKE_REEL_WEBHOOK_URL }}
+          IMGUR_CLIENT_ID:        ${{ secrets.IMGUR_CLIENT_ID }}
           PEXELS_API_KEY:         ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
           PAGE_NAME:              ${{ secrets.PAGE_NAME }}
