@@ -77,26 +77,7 @@ def _publish(story: dict, dry_run: bool, pexels_api_key: str,
         post_id = post_to_facebook(caption, image, fb_page_id, fb_access_token)
         print(f"✅  Posted! Post ID: {post_id}\n")
 
-        # Build and post reel
-        print("🎬  Creating reel…")
-        img_tmp = "reel_source.jpg"
-        save_image(image, img_tmp)
-        reel_path = "reel_output.mp4"
-        if create_reel(img_tmp, reel_path):
-            try:
-                print("📤  Posting reel to Facebook…")
-                post_reel_to_facebook(caption, reel_path, fb_page_id, fb_access_token)
-                print("✅  Reel posted!\n")
-            except Exception as exc:
-                print(f"⚠️   Reel post failed (main post already live): {exc}\n")
-            finally:
-                for f in (img_tmp, reel_path):
-                    try:
-                        os.unlink(f)
-                    except OSError:
-                        pass
-        else:
-            print("⚠️   Reel creation failed — skipping reel post.\n")
+        # Reel posting disabled for now
 
     mark_posted(story["id"])
     return True
@@ -132,28 +113,18 @@ def run(dry_run: bool = False, scheduled: bool = False) -> None:
         print("📭  No new stories to post.")
         return
 
-    # In breaking-news mode, only post if the top story clears the threshold
-    if not scheduled:
-        top = new_stories[0]
-        if top["score"] < breaking_threshold:
-            print(f"📊  Top story score {top['score']}/100 — below threshold {breaking_threshold}. Skipping.")
-            print(f"    → \"{top['title'][:70]}\"")
-            return
-
     # Randomised delay range between consecutive posts (seconds)
     delay_min = int(os.getenv("POST_DELAY_MIN", "25"))
     delay_max = int(os.getenv("POST_DELAY_MAX", "35"))
 
+    # Only post stories that meet the threshold
+    to_post = [s for s in new_stories
+               if s["score"] >= breaking_threshold][:posts_per_run]
+
+    print(f"    Selected {len(to_post)} stories above threshold={breaking_threshold}.\n")
+
     posted_count = 0
-    for story in new_stories:
-        if posted_count >= posts_per_run:
-            break
-
-        # In breaking-news mode each story must still clear the threshold
-        if not scheduled and story["score"] < breaking_threshold:
-            break
-
-        # Random gap between posts — skip delay before the very first post
+    for story in to_post:
         if posted_count > 0 and not dry_run:
             delay = random.uniform(delay_min, delay_max)
             print(f"⏱   Waiting {delay:.1f}s before next post…")
@@ -166,10 +137,9 @@ def run(dry_run: bool = False, scheduled: bool = False) -> None:
                 posted_count += 1
         except Exception as exc:
             print(f"❌  Error: {exc}\n")
-            continue
 
     if posted_count == 0:
-        print("\n📭  No stories met the threshold.")
+        print("\n📭  Nothing was posted this run.")
     else:
         print(f"\n🎉  Done — published {posted_count} post(s).")
 
