@@ -2,8 +2,9 @@ name: Auto Post Football News
 
 on:
   schedule:
-    # Every 30 minutes
-    - cron: "*/30 * * * *"
+    # Every 30 min, on odd minutes (7 & 37) to dodge GitHub's busy :00/:30
+    # top-of-hour congestion where scheduled runs get delayed or dropped.
+    - cron: "7,37 * * * *"
 
   # Trigger manually from GitHub → Actions tab
   workflow_dispatch:
