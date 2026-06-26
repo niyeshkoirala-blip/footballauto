@@ -172,9 +172,10 @@ def preview(count: int = 15) -> None:
     for i, story in enumerate(shown, 1):
         passes    = story["score"] >= breaking_threshold
         label     = "✅  WOULD POST NOW" if passes else "⏭   would skip (score too low)"
-        score_bar = "█" * (story["score"] // 10) + "░" * (10 - story["score"] // 10)
+        filled    = min(10, story["score"] // 10)   # bar caps at 10 blocks
+        score_bar = "█" * filled + "░" * (10 - filled)
 
-        print(f"  #{i:>2}  [{score_bar}] {story['score']:>3}/100  {label}")
+        print(f"  #{i:>2}  [{score_bar}] {story['score']:>4}  {label}")
         print(f"       {story['title']}")
         print(f"       {story['category']}  ·  {story['source']}")
         print()
