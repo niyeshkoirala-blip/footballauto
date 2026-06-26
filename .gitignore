@@ -7,3 +7,7 @@ build/
 .venv/
 venv/
 env/
+.facebook-profile/
+fb_session.json
+fb_post_debug.png
+fb_login_debug.png
