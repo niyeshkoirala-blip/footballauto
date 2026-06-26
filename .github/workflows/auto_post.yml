@@ -36,11 +36,12 @@ jobs:
           GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
           PAGE_NAME:              ${{ secrets.PAGE_NAME }}
           FB_PAGE_URL:            ${{ secrets.FB_PAGE_URL }}
-          POSTS_PER_RUN:          "15"
+          POSTS_PER_RUN:          "25"
           BREAKING_THRESHOLD:     "50"
           POST_DELAY_MIN:         "25"
           POST_DELAY_MAX:         "35"
         run: python main.py
+        
 
       # Persist the list of posted story IDs so we never repost
       - name: Commit updated posted_stories.json
