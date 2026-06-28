@@ -1009,6 +1009,15 @@ def _story_id(entry: dict) -> str:
     return hashlib.md5(key.encode()).hexdigest()
 
 
+def _too_old(entry: dict, max_age_hours: int = 24) -> bool:
+    """True if the entry is older than max_age_hours. Undated entries kept (rare)."""
+    import calendar, time
+    t = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not t:
+        return False  # ponytail: BBC/ESPN always date entries; keep the rare undated one
+    return (time.time() - calendar.timegm(t)) > max_age_hours * 3600
+
+
 def _categorize(title: str, description: str) -> str:
     text = (title + " " + description).lower()
     for category, keywords in CATEGORY_KEYWORDS.items():
@@ -1100,6 +1109,9 @@ def fetch_news(max_stories: int = 20) -> list[dict]:
 
             title = entry.get("title", "").strip()
             if not title:
+                continue
+
+            if _too_old(entry):
                 continue
 
             description = _strip_html(
