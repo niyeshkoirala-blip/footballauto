@@ -73,6 +73,58 @@ def _groq_caption(story: dict, api_key: str) -> str | None:
         return None
 
 
+def judge_stories(stories: list[dict]) -> dict[str, int] | None:
+    """
+    One batched Groq call: rate each story 0-10 for post-worthiness.
+    Returns {story_id: rating}, or None on any failure (caller falls
+    back to keyword-score order).
+    """
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key or not stories:
+        return None
+    try:
+        import json
+        import re
+
+        from groq import Groq
+
+        numbered = "\n".join(
+            f"{i}. {s['title']} — {s.get('description', '')[:200]}"
+            for i, s in enumerate(stories)
+        )
+        prompt = (
+            "You run a hugely popular football fan Facebook page limited to a few "
+            "posts per day, so only genuinely hot news makes the cut.\n\n"
+            "Rate each story below 0-10 for post-worthiness:\n"
+            "- 8-10: dramatic match results, major confirmed transfers, big-name "
+            "player/manager news, title/elimination moments\n"
+            "- 4-7: solid news fans care about but not unmissable\n"
+            "- 0-3: quizzes, TV schedules, how-to guides, minor features, "
+            "speculation, filler\n\n"
+            f"Stories:\n{numbered}\n\n"
+            'Reply with ONLY a JSON array like [{"i": 0, "rating": 9}, ...] '
+            "covering every story. No other text."
+        )
+        client = Groq(api_key=api_key)
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0,
+        )
+        text = completion.choices[0].message.content
+        match = re.search(r"\[.*\]", text, re.DOTALL)   # tolerate stray prose
+        ratings = {}
+        for item in json.loads(match.group(0)):
+            i = int(item["i"])
+            if 0 <= i < len(stories):
+                ratings[stories[i]["id"]] = int(item["rating"])
+        return ratings or None
+    except Exception as e:
+        print(f"  [content_formatter] Groq judge error (using keyword order): {e}")
+        return None
+
+
 def format_caption(story: dict) -> str:
     """Return a detailed Facebook post caption for the story."""
     api_key = os.getenv("GROQ_API_KEY", "").strip()

@@ -24,11 +24,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.news_fetcher      import fetch_news
-from src.content_formatter import format_caption, format_image_brief
+from src.content_formatter import format_caption, format_image_brief, judge_stories
 from src.image_creator     import create_post_image, save_image
 from src.facebook_poster   import post_to_facebook, post_reel_to_facebook
 from src.reel_creator      import create_reel
-from src.story_tracker     import is_posted, mark_posted
+from src.story_tracker     import is_posted, mark_posted, posts_today
 
 
 def validate_config(dry_run: bool) -> None:
@@ -83,7 +83,7 @@ def _publish(story: dict, dry_run: bool, pexels_api_key: str,
     return True
 
 
-def run(dry_run: bool = False, scheduled: bool = False) -> None:
+def run(dry_run: bool = False, scheduled: bool = False) -> int:
     validate_config(dry_run)
 
     fb_page_id        = os.getenv("FB_PAGE_ID", "")
@@ -101,7 +101,7 @@ def run(dry_run: bool = False, scheduled: bool = False) -> None:
 
     if not stories:
         print("    No stories found. Will retry next run.")
-        return
+        return 0
 
     # Filter to unseen stories only, sorted by score descending
     new_stories = [s for s in stories if not is_posted(s["id"])]
@@ -111,17 +111,34 @@ def run(dry_run: bool = False, scheduled: bool = False) -> None:
 
     if not new_stories:
         print("📭  No new stories to post.")
-        return
+        return 0
 
     # Randomised delay range between consecutive posts (seconds)
     delay_min = int(os.getenv("POST_DELAY_MIN", "25"))
     delay_max = int(os.getenv("POST_DELAY_MAX", "35"))
 
-    # Only post stories that meet the threshold
-    to_post = [s for s in new_stories
-               if s["score"] >= breaking_threshold][:posts_per_run]
+    # Daily budget — hard cap across all runs (counter lives in posted_stories.json)
+    max_per_day = int(os.getenv("MAX_POSTS_PER_DAY", "15"))
+    budget      = max_per_day - posts_today()
+    if budget <= 0:
+        print(f"📭  Daily budget reached ({max_per_day} posts today). Next run tomorrow.")
+        return 0
+    print(f"    Daily budget: {budget} of {max_per_day} posts remaining.")
 
-    print(f"    Selected {len(to_post)} stories above threshold={breaking_threshold}.\n")
+    # Keyword pre-filter → shortlist for the Groq judge
+    shortlist = [s for s in new_stories if s["score"] >= breaking_threshold][:20]
+
+    # Groq judges hot-news worthiness; falls back to keyword order if unavailable
+    min_rating = int(os.getenv("GROQ_MIN_RATING", "7"))
+    ratings    = judge_stories(shortlist)
+    if ratings is not None:
+        judged = [s for s in shortlist if ratings.get(s["id"], 0) >= min_rating]
+        judged.sort(key=lambda s: ratings[s["id"]], reverse=True)
+        print(f"    Groq judge: {len(judged)} of {len(shortlist)} rated ≥ {min_rating}.")
+        shortlist = judged
+
+    to_post = shortlist[:min(posts_per_run, budget)]
+    print(f"    Selected {len(to_post)} stories to post.\n")
 
     posted_count = 0
     for story in to_post:
@@ -142,6 +159,47 @@ def run(dry_run: bool = False, scheduled: bool = False) -> None:
         print("\n📭  Nothing was posted this run.")
     else:
         print(f"\n🎉  Done — published {posted_count} post(s).")
+    return posted_count
+
+
+def _commit_state() -> None:
+    """On GitHub Actions, push posted_stories.json after each post so state
+    survives even if the long-running job is cancelled mid-flight."""
+    if not os.getenv("GITHUB_ACTIONS"):
+        return
+    os.system(  # ponytail: best-effort; the workflow's final commit step is the backstop
+        "git add posted_stories.json && "
+        'git -c user.name="github-actions[bot]" '
+        '-c user.email="github-actions[bot]@users.noreply.github.com" '
+        'commit -m "chore: update posted stories [skip ci]" && '
+        "git pull --rebase --autostash && git push"
+    )
+
+
+def daemon() -> None:
+    """Listen continuously: poll the feeds every POLL_SECONDS, post fresh
+    worthy news immediately. Exits after MAX_RUNTIME_MIN so the next
+    scheduled GitHub Actions job can take over (24/7 via chained jobs)."""
+    poll      = int(os.getenv("POLL_SECONDS", "60"))
+    max_min   = int(os.getenv("MAX_RUNTIME_MIN", "290"))
+    gap_min   = int(os.getenv("MIN_POST_GAP_MIN", "15"))
+    start     = time.time()
+    last_post = 0.0
+
+    print(f"👂  Daemon mode: polling every {poll}s for {max_min} min "
+          f"(min {gap_min} min between posts)\n")
+
+    while time.time() - start < max_min * 60:
+        if time.time() - last_post >= gap_min * 60:
+            try:
+                if run() > 0:
+                    last_post = time.time()
+                    _commit_state()
+            except Exception as exc:
+                print(f"❌  Poll error: {exc}")
+        time.sleep(poll)
+
+    print("👋  Runtime limit reached — exiting so the next job takes over.")
 
 
 def preview(count: int = 15) -> None:
@@ -192,7 +250,9 @@ if __name__ == "__main__":
     dry       = "--dry-run"   in sys.argv
     scheduled = "--scheduled" in sys.argv
 
-    if "--preview" in sys.argv:
+    if "--daemon" in sys.argv:
+        daemon()
+    elif "--preview" in sys.argv:
         idx = sys.argv.index("--preview")
         try:
             count = int(sys.argv[idx + 1])
