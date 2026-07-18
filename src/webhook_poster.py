@@ -43,7 +43,10 @@ def _post(env_name: str, caption: str, field: str,
                 files={field: (filename, blob, mime)},  # bytes → reusable across retries
                 timeout=timeout,
             )
-            r.raise_for_status()
+            if r.status_code >= 400:
+                # Make puts the reason in the body, e.g. "There is no scenario
+                # listening for this webhook" (scenario OFF or out of operations)
+                raise RuntimeError(f"{r.status_code}: {r.text[:150]}")
             return "posted"
         except Exception as e:  # ponytail: retries next account. Make returns 200 even
             last_err = e         # when out of ops, so this only catches hard errors —
