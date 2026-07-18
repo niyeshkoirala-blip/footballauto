@@ -2,18 +2,26 @@ name: Auto Post Football News
 
 on:
   schedule:
-    # Every 30 min, on odd minutes (7 & 37) to dodge GitHub's busy :00/:30
-    # top-of-hour congestion where scheduled runs get delayed or dropped.
-    - cron: "7,37 * * * *"
+    # BACKSTOP ONLY — the chain sustains itself via workflow_dispatch below.
+    # If the chain ever dies, this revives it (cron can be hours late; the
+    # self-dispatch at the end of each job is what keeps 24/7 coverage).
+    - cron: "3 */5 * * *"
 
-  # Trigger manually from GitHub → Actions tab
+  # Trigger manually from GitHub → Actions tab, and how each job chains the next
   workflow_dispatch:
+
+# Never two daemons at once; a new job replaces a stuck/old one
+concurrency:
+  group: football-daemon
+  cancel-in-progress: true
 
 jobs:
   post-news:
     runs-on: ubuntu-latest
+    timeout-minutes: 355   # hard stop under GitHub's 6h job limit
     permissions:
       contents: write   # needed to commit posted_stories.json back
+      actions: write    # needed to dispatch the next job in the chain
 
     steps:
       - name: Checkout repository
@@ -37,11 +45,16 @@ jobs:
           GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
           PAGE_NAME:              ${{ secrets.PAGE_NAME }}
           FB_PAGE_URL:            ${{ secrets.FB_PAGE_URL }}
-          POSTS_PER_RUN:          "10"
+          POSTS_PER_RUN:          "2"
+          MAX_POSTS_PER_DAY:      "15"
+          GROQ_MIN_RATING:        "7"
           BREAKING_THRESHOLD:     "50"
           POST_DELAY_MIN:         "25"
           POST_DELAY_MAX:         "35"
-        run: python main.py
+          POLL_SECONDS:           "60"
+          MIN_POST_GAP_MIN:       "15"
+          MAX_RUNTIME_MIN:        "290"
+        run: python main.py --daemon
         
 
       # Persist the list of posted story IDs so we never repost
@@ -53,3 +66,13 @@ jobs:
           git add posted_stories.json
           git diff --staged --quiet || git commit -m "chore: update posted stories [skip ci]"
           git push
+
+      # Keep the 24/7 chain alive: start the next daemon job ourselves.
+      # workflow_dispatch fires within seconds — unlike cron, which GitHub
+      # may delay by hours. (GITHUB_TOKEN is allowed to trigger
+      # workflow_dispatch runs; the no-recursion rule exempts it.)
+      - name: Chain next daemon job
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run auto_post.yml --ref main
