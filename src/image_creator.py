@@ -1,69 +1,77 @@
 """
-Creates a 1080x1080 Facebook post image.
+Creates a 1080x1350 Facebook post image.
 
-Theme: Pitch Side News — deep navy (#0A1634) + bright green (#48B937)
+Theme: Pitch Side News — deep navy (#0f2038) + bright green (#39c66b)
 
-Layout:
+Layout (matches the "Post Design" mockup):
   ┌──────────────────────────────┐
-  │  Photo — navy gradient       │  ~58 % height
+  │ ╭● INTERNATIONAL╮            │  ← green pill, top-left
+  │        Photo                 │  760 px, navy scrim fading in
   │                              │
-  │  ╭─ CATEGORY PILL ─╮        │  ← green pill
-  │  ╭── HEADLINE LINE 1 ──╮    │  ← navy rounded banners
-  │  ╭── HEADLINE LINE 2 ──╮    │
-  ├══════════════════════════════╡  green separator
-  │  Brief description text…     │  ← white text on dark navy
-  │  More description text…      │
+  │  Headline over the photo     │  ← Caprasimo 56, white
+  ├──────────────────────────────┤
+  │ ▌ Brief description text…    │  ← green rule + #c9d3e0 body
   │                              │
-  │▐▌ PITCH SIDE • NEWS ▐▌      │  ← green + white brand bar
+  │ ─────────────────────────    │
+  │   ⌁ PITCH SIDE NEWS ⌁        │  ← centred brand line
   └──────────────────────────────┘
 """
 
 import os
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from src.image_fetcher import fetch_story_image
 
 # ── Canvas ─────────────────────────────────────────────────────────────────────
-WIDTH       = 1080
-HEIGHT      = 1080
-PHOTO_H     = 780
-BRAND_BAR_H = 80
-ACCENT_W    = 7
+WIDTH   = 1080
+HEIGHT  = 1350
+PHOTO_H = 760
+PAD_X   = 44
+PAD_TOP = 36
+PAD_BOT = 40
 
-# ── Brand colours (Pitch Side News) ────────────────────────────────────────────
-NAVY        = (10,  22,  52)
-NAVY_MID    = (16,  34,  78)
-NAVY_LIGHT  = (22,  48, 105)
-GREEN       = (72, 185,  55)
-GREEN_DARK  = (42, 130,  32)
-WHITE       = (255, 255, 255)
-OFF_WHITE   = (210, 220, 235)   # blue-tinted white for secondary text
-BLACK       = (0,   0,   0)
+# ── Brand colours ──────────────────────────────────────────────────────────────
+NAVY   = (15, 32, 56)      # #0f2038
+GREEN  = (57, 198, 107)    # #39c66b
+WHITE  = (255, 255, 255)
+BODY   = (201, 211, 224)   # #c9d3e0
+RULE   = (46, 60, 82)      # navy + rgba(255,255,255,0.12)
 
-# ── Fonts ───────────────────────────────────────────────────────────────────────
-FONT_BLACK   = "/usr/share/fonts/truetype/lato/Lato-Black.ttf"
-FONT_BOLD    = "/usr/share/fonts/truetype/lato/Lato-Bold.ttf"
-FONT_REGULAR = "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"
+# ── Fonts ──────────────────────────────────────────────────────────────────────
+_FONT_DIR = os.path.join(os.path.dirname(__file__), "..", "fonts")
+DISPLAY   = os.path.join(_FONT_DIR, "Caprasimo-Regular.ttf")
+FIGTREE   = os.path.join(_FONT_DIR, "Figtree-Variable.ttf")
+
+_FALLBACK = [
+    "/usr/share/fonts/truetype/lato/Lato-Black.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
 
 
-def _font(size: int, bold: bool = False, black: bool = False) -> ImageFont.FreeTypeFont:
-    candidates = (
-        [FONT_BLACK, FONT_BOLD, "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
-        if black else
-        [FONT_BOLD,  "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
-        if bold else
-        [FONT_REGULAR, "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"]
-    )
-    for path in candidates:
+def _display(size: int) -> ImageFont.FreeTypeFont:
+    """Caprasimo — headline + brand wordmark."""
+    if os.path.exists(DISPLAY):
+        return ImageFont.truetype(DISPLAY, size)
+    for path in _FALLBACK:
         if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default(size)
 
 
-# ── Image helpers ───────────────────────────────────────────────────────────────
+def _body(size: int, weight: str = "Medium") -> ImageFont.FreeTypeFont:
+    """Figtree variable font at the named weight."""
+    if os.path.exists(FIGTREE):
+        font = ImageFont.truetype(FIGTREE, size)
+        font.set_variation_by_name(weight)
+        return font
+    for path in _FALLBACK:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default(size)
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _crop_center(img: Image.Image, w: int, h: int) -> Image.Image:
     scale = max(w / img.width, h / img.height)
@@ -74,131 +82,55 @@ def _crop_center(img: Image.Image, w: int, h: int) -> Image.Image:
     return img.crop((left, top, left + w, top + h))
 
 
-def _navy_gradient_overlay(img: Image.Image) -> Image.Image:
-    """Dark at bottom with a navy tint, stays bright at the top."""
+def _scrim(img: Image.Image) -> Image.Image:
+    """linear-gradient(180deg, transparent 45%, navy 0.85 at 88%, navy 100%)."""
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw    = ImageDraw.Draw(overlay)
     h       = img.height
     for y in range(h):
-        t = y / h
-        if t < 0.30:
-            alpha = int(20 * (t / 0.30))
+        t = y / (h - 1)
+        if t <= 0.45:
+            a = 0.0
+        elif t <= 0.88:
+            a = 0.85 * (t - 0.45) / 0.43
         else:
-            alpha = int(20 + 215 * ((t - 0.30) / 0.70))
-        # Tint toward navy rather than pure black
-        r = int(10  * (alpha / 255))
-        g = int(22  * (alpha / 255))
-        b = int(52  * (alpha / 255))
-        draw.line([(0, y), (img.width - 1, y)],
-                  fill=(max(0, r), max(0, g), max(0, b), alpha))
+            a = 0.85 + 0.15 * (t - 0.88) / 0.12
+        draw.line([(0, y), (img.width - 1, y)], fill=NAVY + (int(a * 255),))
     return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 
 
-def _pill(draw: ImageDraw.ImageDraw, xy: list, fill, radius: int = 999) -> None:
-    x0, y0, x1, y1 = xy
-    r = min(radius, (y1 - y0) // 2, (x1 - x0) // 2)
-    try:
-        draw.rounded_rectangle(xy, radius=r, fill=fill)
-    except AttributeError:
-        draw.rectangle(xy, fill=fill)
-
-
 def _wrap(draw: ImageDraw.ImageDraw, text: str,
-          font: ImageFont.FreeTypeFont, max_px: int) -> list[str]:
-    words = text.split()
-    lines: list[str] = []
-    cur:   list[str] = []
-    for word in words:
-        test = " ".join(cur + [word])
-        if draw.textlength(test, font=font) <= max_px:
+          font: ImageFont.FreeTypeFont, max_px: float) -> list[str]:
+    lines, cur = [], []
+    for word in text.split():
+        if draw.textlength(" ".join(cur + [word]), font=font) <= max_px or not cur:
             cur.append(word)
         else:
-            if cur:
-                lines.append(" ".join(cur))
+            lines.append(" ".join(cur))
             cur = [word]
     if cur:
         lines.append(" ".join(cur))
     return lines
 
 
-# ── Decorative helpers ──────────────────────────────────────────────────────────
-
-def _draw_pitch_lines(draw: ImageDraw.ImageDraw, x: int, y: int,
-                      size: int, color, alpha_img: Image.Image) -> None:
-    """Draw a tiny football pitch icon."""
-    # outer circle
-    draw.ellipse([x - size, y - size, x + size, y + size],
-                 outline=color, width=2)
-    # centre dot
-    draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=color)
-    # horizontal midline
-    draw.line([(x - size, y), (x + size, y)], fill=color, width=2)
+def _draw_lines(draw: ImageDraw.ImageDraw, x: int, top: int, lines: list[str],
+                font: ImageFont.FreeTypeFont, line_h: int, fill) -> None:
+    """Draw lines in CSS line-box fashion: glyphs vertically centred in line_h."""
+    ascent, descent = font.getmetrics()
+    offset = (line_h - (ascent + descent)) // 2
+    for i, line in enumerate(lines):
+        draw.text((x, top + i * line_h + offset), line, font=font, fill=fill)
 
 
-def _draw_brand_bar(draw: ImageDraw.ImageDraw, canvas: Image.Image,
-                    bar_top: int, page_name: str) -> None:
-    """
-    Two-tone brand bar:
-      left half → dark navy
-      separator → bright green vertical stripe
-      full bar  → navy
-    Text: 'PITCH SIDE' in white + 'NEWS' in green, centred.
-    """
-    # Background
-    draw.rectangle([0, bar_top, WIDTH, HEIGHT], fill=NAVY)
-
-    # Green top border line
-    draw.rectangle([0, bar_top, WIDTH, bar_top + 4], fill=GREEN)
-
-    # Split page_name into parts to colour "NEWS" green
-    name_upper = page_name.upper()
-    font_brand = _font(38, bold=True)
-
-    # Render whole name white first, then overwrite "NEWS" in green
-    parts = name_upper.split()
-    coloured = []
-    for part in parts:
-        if part in ("NEWS", "FC", "SIDE"):
-            coloured.append((part, GREEN))
-        else:
-            coloured.append((part, WHITE))
-
-    # Measure total width
-    space_w = int(draw.textlength(" ", font=font_brand))
-    total_w = sum(int(draw.textlength(p, font=font_brand)) for p, _ in coloured) \
-              + space_w * (len(coloured) - 1)
-
-    text_y = bar_top + (BRAND_BAR_H - font_brand.size) // 2
-
-    # Draw green accent chevrons
-    cx = (WIDTH - total_w) // 2 - 36
-    for offset in (0, 10):
-        for yi in range(4):
-            draw.line([
-                (cx - 8 + offset, text_y + yi * 9),
-                (cx      + offset, text_y + yi * 9 + 4),
-                (cx - 8 + offset, text_y + yi * 9 + 8),
-            ], fill=GREEN, width=2)
-
-    cx2 = (WIDTH + total_w) // 2 + 18
-    for offset in (0, 10):
-        for yi in range(4):
-            draw.line([
-                (cx2 + 8 - offset, text_y + yi * 9),
-                (cx2     - offset, text_y + yi * 9 + 4),
-                (cx2 + 8 - offset, text_y + yi * 9 + 8),
-            ], fill=GREEN, width=2)
-
-    # Draw each word
-    cur_x = (WIDTH - total_w) // 2
-    for i, (part, color) in enumerate(coloured):
-        draw.text((cur_x, text_y), part, fill=color, font=font_brand)
-        cur_x += int(draw.textlength(part, font=font_brand))
-        if i < len(coloured) - 1:
-            cur_x += space_w
+def _pulse(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 18) -> None:
+    """The heartbeat glyph flanking the brand name (24x24 viewBox, scaled)."""
+    s = size / 24
+    pts = [(4, 12), (8, 12), (11, 20), (15, 4), (18, 12), (22, 12)]
+    draw.line([(x + px * s, y + py * s) for px, py in pts],
+              fill=GREEN, width=max(2, round(2.75 * s)), joint="curve")
 
 
-# ── Public API ──────────────────────────────────────────────────────────────────
+# ── Public API ─────────────────────────────────────────────────────────────────
 
 def create_post_image(
     title:          str,
@@ -209,85 +141,86 @@ def create_post_image(
     page_name:      str = "PITCH SIDE News",
 ) -> Image.Image:
 
-    # 1. Background photo ────────────────────────────────────────────────────────
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), NAVY)
+    draw   = ImageDraw.Draw(canvas)
+
+    # 1. Photo + scrim ──────────────────────────────────────────────────────────
     bg_src = fetch_story_image(story, pexels_api_key)
     if bg_src is None:
         bg_src = Image.new("RGB", (WIDTH, PHOTO_H), (20, 60, 20))
+    canvas.paste(_scrim(_crop_center(bg_src, WIDTH, PHOTO_H)), (0, 0))
 
-    bg = _navy_gradient_overlay(_crop_center(bg_src, WIDTH, PHOTO_H))
+    # 2. Category pill — top-left, green on navy text ───────────────────────────
+    cat_font = _body(20, "ExtraBold")
+    cat_text = category.upper()
+    cat_w    = draw.textlength(cat_text, font=cat_font)
+    pill     = [PAD_X, 44, PAD_X + 18 + 10 + 10 + cat_w + 22, 44 + 11 + 20 + 11]
+    draw.rounded_rectangle(pill, radius=(pill[3] - pill[1]) / 2, fill=GREEN)
+    dot_cx, dot_cy = PAD_X + 18 + 5, (pill[1] + pill[3]) / 2
+    draw.ellipse([dot_cx - 5, dot_cy - 5, dot_cx + 5, dot_cy + 5], fill=NAVY)
+    _draw_lines(draw, int(PAD_X + 18 + 10 + 10), int(pill[1] + 11),
+                [cat_text], cat_font, 20, NAVY)
 
-    # 2. Canvas — dark navy base ─────────────────────────────────────────────────
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), NAVY)
-    canvas.paste(bg, (0, 0))
-    draw = ImageDraw.Draw(canvas)
+    # 3. Headline — Caprasimo, sitting on the bottom of the photo ───────────────
+    h_font   = _display(56)
+    h_line_h = round(56 * 1.12)
+    h_lines  = _wrap(draw, title, h_font, WIDTH - PAD_X * 2)[:4]
+    _draw_lines(draw, PAD_X, PHOTO_H - 36 - h_line_h * len(h_lines),
+                h_lines, h_font, h_line_h, WHITE)
 
-    MARGIN = 54
-    MAX_W  = WIDTH - MARGIN * 2
+    # 4. Brief description — green rule + body copy ─────────────────────────────
+    d_font   = _body(26, "Medium")
+    d_line_h = round(26 * 1.5)
+    d_x      = PAD_X + 5 + 20
+    d_lines  = _wrap(draw, brief_text, d_font, WIDTH - d_x - PAD_X)[:6]
+    d_top    = PHOTO_H + PAD_TOP
+    draw.rounded_rectangle(
+        [PAD_X, d_top, PAD_X + 5, d_top + d_line_h * len(d_lines)],
+        radius=3, fill=GREEN,
+    )
+    _draw_lines(draw, d_x, d_top, d_lines, d_font, d_line_h, BODY)
 
-    # 3. Headline banners (overlaid on photo) ────────────────────────────────────
-    h_font  = _font(52, black=True)
-    H_PH, H_PV = 24, 13
+    # 5. Brand line — centred above the bottom padding ──────────────────────────
+    b_font   = _display(26)
+    b_line_h = 36
+    b_top    = HEIGHT - PAD_BOT - b_line_h
+    draw.line([(PAD_X, b_top - 32), (WIDTH - PAD_X, b_top - 32)], fill=RULE, width=1)
 
-    headline_lines = _wrap(draw, title, h_font, MAX_W - H_PH * 2)[:3]
-    line_h         = h_font.size + H_PV * 2 + 8
+    # "PITCH SIDE NEWS" with the middle word in green
+    words  = page_name.upper().split()
+    parts  = [(w, GREEN if w in ("SIDE", "NEWS") and i == 1 else WHITE)
+              for i, w in enumerate(words)]
+    space  = draw.textlength(" ", font=b_font)
+    text_w = sum(draw.textlength(w, font=b_font) for w, _ in parts) + space * (len(parts) - 1)
 
-    cat_font  = _font(26, bold=True)
-    CAT_PH, CAT_PV = 22, 10
-    cat_text  = f"● {category.upper()}"
-    cat_w     = int(draw.textlength(cat_text, font=cat_font))
-    cat_box_h = cat_font.size + CAT_PV * 2
+    x = (WIDTH - text_w) / 2
+    for word, colour in parts:
+        _draw_lines(draw, int(x), b_top, [word], b_font, b_line_h, colour)
+        x += draw.textlength(word, font=b_font) + space
 
-    gap = 16
-    total_h = cat_box_h + gap + line_h * len(headline_lines)
+    icon_y = b_top + (b_line_h - 18) // 2
+    _pulse(draw, int((WIDTH - text_w) / 2 - 14 - 18), icon_y)
+    _pulse(draw, int((WIDTH + text_w) / 2 + 14), icon_y)
 
-    overlay_top = PHOTO_H - total_h - 22
-
-    # Category pill — bright green, fully rounded
-    cat_y = overlay_top
-    _pill(draw,
-          [MARGIN, cat_y, MARGIN + cat_w + CAT_PH * 2, cat_y + cat_box_h],
-          fill=GREEN)
-    draw.text((MARGIN + CAT_PH, cat_y + CAT_PV), cat_text, fill=WHITE, font=cat_font)
-
-    # Headline banners — deep navy, heavily rounded
-    current_y = cat_y + cat_box_h + gap
-    for i, line in enumerate(headline_lines):
-        lw    = int(draw.textlength(line, font=h_font))
-        lh    = h_font.size
-        color = NAVY if i % 2 == 0 else NAVY_MID
-        _pill(draw,
-              [MARGIN, current_y, MARGIN + lw + H_PH * 2, current_y + lh + H_PV * 2],
-              fill=color, radius=28)
-        # Subtle green left edge accent on banner
-        draw.rectangle(
-            [MARGIN, current_y + 6, MARGIN + 5, current_y + lh + H_PV * 2 - 6],
-            fill=GREEN,
-        )
-        draw.text((MARGIN + H_PH, current_y + H_PV), line, fill=WHITE, font=h_font)
-        current_y += lh + H_PV * 2 + 8
-
-    # 4. Green separator ─────────────────────────────────────────────────────────
-    draw.rectangle([0, PHOTO_H, WIDTH, PHOTO_H + 5], fill=GREEN)
-
-    # Left green accent strip
-    draw.rectangle([0, PHOTO_H + 5, ACCENT_W, HEIGHT - BRAND_BAR_H], fill=GREEN)
-
-    # 5. Brief description ───────────────────────────────────────────────────────
-    d_font   = _font(33)
-    d_line_h = d_font.size + 12
-    desc_x   = MARGIN + 4
-    desc_y   = PHOTO_H + 36
-
-    for line in _wrap(draw, brief_text, d_font, MAX_W - 4)[:4]:
-        draw.text((desc_x, desc_y), line, fill=OFF_WHITE, font=d_font)
-        desc_y += d_line_h
-
-    # 6. Brand bar ───────────────────────────────────────────────────────────────
-    bar_top = HEIGHT - BRAND_BAR_H
-    _draw_brand_bar(draw, canvas, bar_top, page_name)
-
+    # ponytail: no 36px corner radius — JPEG has no alpha and Facebook rounds
+    # the post card itself. Add here only if we ever emit PNG.
     return canvas
 
 
 def save_image(img: Image.Image, path: str) -> None:
     img.save(path, format="JPEG", quality=95, optimize=True)
+
+
+if __name__ == "__main__":
+    # Self-check: renders with no network image and asserts the canvas geometry.
+    img = create_post_image(
+        title      = "'Best host in the world': Mexico keep spirits up after England heartbreak",
+        brief_text = "Despite 'a setback that will hurt for eternity', the co-hosts exit with "
+                     "heads held high after bringing pride, passion and soul.",
+        category   = "International",
+        story      = {"title": "", "description": ""},
+    )
+    assert img.size == (WIDTH, HEIGHT), img.size
+    assert img.getpixel((5, HEIGHT - 5)) == NAVY, "bottom band should be navy"
+    save_image(img, "design_check.jpg")
+    print("ok → design_check.jpg")

@@ -805,12 +805,11 @@ def score_story(title: str, description: str = "") -> int:
 
     return max(0, score)
 
+# Single source by choice: BBC Sport football. Every entry is reliably dated,
+# football-only, never paywalled, and carries a high-res editorial image we can
+# upgrade to /976/. Multi-source meant the same match posted five times over.
 RSS_FEEDS = [
     {"url": "https://feeds.bbci.co.uk/sport/football/rss.xml",   "source": "BBC Sport"},
-    {"url": "https://www.espn.com/espn/rss/soccer/news",          "source": "ESPN"},
-    {"url": "https://www.theguardian.com/football/rss",           "source": "The Guardian"},
-    {"url": "https://www.skysports.com/rss/12040",                "source": "Sky Sports"},
-    {"url": "https://www.goal.com/feeds/en/news",                 "source": "Goal.com"},
 ]
 
 # ── Category detection ─────────────────────────────────────────────────────────
@@ -1009,13 +1008,53 @@ def _story_id(entry: dict) -> str:
     return hashlib.md5(key.encode()).hexdigest()
 
 
-def _too_old(entry: dict, max_age_hours: int = 24) -> bool:
-    """True if the entry is older than max_age_hours. Undated entries kept (rare)."""
+def _age_hours(entry: dict) -> float:
+    """Hours since publication. 0.0 for undated or future-dated entries
+    (Sky timestamps some posts a few minutes ahead of the clock)."""
     import calendar, time
     t = entry.get("published_parsed") or entry.get("updated_parsed")
     if not t:
-        return False  # ponytail: BBC/ESPN always date entries; keep the rare undated one
-    return (time.time() - calendar.timegm(t)) > max_age_hours * 3600
+        return 0.0  # ponytail: BBC/ESPN always date entries; keep the rare undated one
+    return max(0.0, (time.time() - calendar.timegm(t)) / 3600)
+
+
+def _too_old(entry: dict, max_age_minutes: int | None = None) -> bool:
+    """True if the entry is older than MAX_AGE_MINUTES (default 30).
+
+    Only genuinely new news gets posted. The daemon polls once a minute, so a
+    story is normally 0-2 minutes old when it is picked up; the window only
+    needs enough slack to survive a job handoff (~1-2 min) or a brief outage.
+    Anything older than that is stale by the time it would reach the page, so
+    it is dropped rather than queued.
+    """
+    import os
+    if max_age_minutes is None:
+        max_age_minutes = int(os.getenv("MAX_AGE_MINUTES", "30"))
+    return _age_hours(entry) * 60 > max_age_minutes
+
+
+# Other-sport rejects. Matched on word boundaries, never as substrings —
+# plain "in" tests wrongly killed football stories: "the open" fires on "the
+# opening goal", "gaa" on "van Gaal", "boxing" on Boxing Day fixtures.
+# Terms stay sport-specific for the same reason: bare "stakes" rejected a
+# World Cup story for the phrase "high stakes".
+_NOT_FOOTBALL_RE = re.compile(
+    r"\b("
+    r"horse racing|racecourse|jockey|gelding|filly|furlong|nassau stakes|"
+    r"golf|golfer|ryder cup|pga|lpga|birdie|the masters|"
+    r"cricket|test match|the ashes|wicket|t20|"
+    r"formula 1|grand prix|pole position|"
+    r"nfl|nba|mlb|nhl|super bowl|"
+    r"tennis|wimbledon|atp tour|wta|"
+    r"heavyweight|ufc|mma|"
+    r"rugby|six nations|snooker|tour de france|"
+    r"netball|hurling abuse"
+    r")\b"
+)
+
+
+def _is_football(title: str, description: str = "") -> bool:
+    return not _NOT_FOOTBALL_RE.search((title + " " + description).lower())
 
 
 def _categorize(title: str, description: str) -> str:
@@ -1081,6 +1120,24 @@ def _extract_rss_image(entry: dict) -> str:
     return ""
 
 
+def same_event(a: str, b: str) -> bool:
+    """True if two headlines from different outlets cover the same story.
+
+    Every source runs its own piece on a big match or transfer, and each gets
+    a different id (the id is a hash of the link), so without this the page
+    posts the same news five times in five minutes.
+    """
+    def tokens(t: str) -> set[str]:
+        words = re.findall(r"[a-z0-9']+", t.lower())
+        return {w for w in words if w not in _STOP_WORDS and len(w) > 2}
+
+    ta, tb = tokens(a), tokens(b)
+    if not ta or not tb:
+        return False
+    # Jaccard over the smaller headline: tolerates one outlet being wordier.
+    return len(ta & tb) / min(len(ta), len(tb)) >= 0.5
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def fetch_news(max_stories: int = 20) -> list[dict]:
@@ -1118,6 +1175,9 @@ def fetch_news(max_stories: int = 20) -> list[dict]:
                 entry.get("summary", entry.get("description", ""))
             ).strip()
 
+            if not _is_football(title, description):
+                continue
+
             category = _categorize(title, description)
 
             stories.append(
@@ -1129,6 +1189,7 @@ def fetch_news(max_stories: int = 20) -> list[dict]:
                     "source":        feed_info["source"],
                     "category":      category,
                     "published":     entry.get("published", ""),
+                    "age_hours":     _age_hours(entry),
                     "score":         score_story(title, description),
                     # Editorial image from the RSS feed itself (most accurate)
                     "article_image": _extract_rss_image(entry),
@@ -1141,3 +1202,40 @@ def fetch_news(max_stories: int = 20) -> list[dict]:
                 return stories
 
     return stories
+
+
+def _demo() -> None:
+    """Regressions the reject-list and dedup have already caused once."""
+    # football stories that earlier substring matching wrongly dropped
+    assert _is_football("Is World Cup sell-off a step too far?", "a high stakes plan")
+    assert _is_football("Arsenal score the opening goal at the Emirates")
+    assert _is_football("Van Gaal returns to management")
+    assert _is_football("Boxing Day fixtures confirmed for the Premier League")
+    assert _is_football("Rangers hurling abuse at referee is unacceptable") is False
+    # genuine other-sport stories must still go
+    assert not _is_football("Doyle: Diamond Necklace to sparkle in Nassau Stakes")
+    assert not _is_football("Who will win the AIG Women's Open?", "golf major preview")
+    assert not _is_football("England name Ashes squad", "test match cricket")
+
+    # freshness window: only genuinely new news is eligible
+    import time as _t, calendar as _c
+    def _entry(minutes_old: float) -> dict:
+        return {"published_parsed": _t.gmtime(_c.timegm(_t.gmtime()) - minutes_old * 60)}
+    assert not _too_old(_entry(0))        # just published
+    assert not _too_old(_entry(29))       # inside the 30-min default
+    assert _too_old(_entry(31))           # stale
+    assert _too_old(_entry(120))          # the 2h backlog that used to post
+    assert not _too_old(_entry(-5))       # future-dated clocks skew, treat as now
+    assert not _too_old({})               # undated entries are kept
+
+    # same-event collapse
+    assert same_event("Spain beat Portugal in Nations League final",
+                      "Spain beat Portugal in the Nations League final")
+    assert not same_event("Spain beat Portugal in final",
+                          "Liverpool preparing opening bid for Barcola")
+    assert not same_event("", "anything")
+    print("OK")
+
+
+if __name__ == "__main__":
+    _demo()

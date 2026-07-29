@@ -44,15 +44,13 @@ jobs:
           PEXELS_API_KEY:         ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
           PAGE_NAME:              ${{ secrets.PAGE_NAME }}
-          FB_PAGE_URL:            ${{ secrets.FB_PAGE_URL }}
-          POSTS_PER_RUN:          "2"
-          MAX_POSTS_PER_DAY:      "15"
-          GROQ_MIN_RATING:        "7"
+          MAX_POSTS_PER_DAY:      "60"
+          MIN_POSTS_PER_DAY:      "10"
           BREAKING_THRESHOLD:     "50"
+          MAX_AGE_MINUTES:        "30"
           POST_DELAY_MIN:         "25"
           POST_DELAY_MAX:         "35"
           POLL_SECONDS:           "60"
-          MIN_POST_GAP_MIN:       "15"
           MAX_RUNTIME_MIN:        "290"
         run: python main.py --daemon
         
