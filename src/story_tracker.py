@@ -42,11 +42,23 @@ def posts_today() -> int:
     return _load()["daily"].get(_today(), 0)
 
 
-def mark_posted(story_id: str) -> None:
+def behind_pace(min_per_day: int) -> bool:
+    """True when today's count is behind the pro-rata pace needed to reach
+    min_per_day by midnight UTC. The caller then drops the quality threshold
+    so the daily minimum is still met on quiet news days."""
+    now     = datetime.now(timezone.utc)
+    elapsed = (now.hour * 60 + now.minute) / 1440
+    return posts_today() < min_per_day * elapsed
+
+
+def mark_posted(story_id: str, count: bool = True) -> None:
+    """Record a story as seen. count=False suppresses it without spending
+    daily budget — used for duplicate retellings we deliberately skip."""
     tracker = _load()
     if story_id not in tracker["posted"]:
         tracker["posted"].append(story_id)
-        tracker["daily"][_today()] = tracker["daily"].get(_today(), 0) + 1
+        if count:
+            tracker["daily"][_today()] = tracker["daily"].get(_today(), 0) + 1
     _save(tracker)
 
 
@@ -65,6 +77,10 @@ def _demo() -> None:
         _save(t)
         assert "2000-01-01" not in _load()["daily"]
         assert posts_today() == 2
+        assert behind_pace(1000)        # 2 posts is behind any sane pace
+        assert not behind_pace(0)       # no minimum → never behind
+        mark_posted("dup", count=False)               # suppressed, not published
+        assert is_posted("dup") and posts_today() == 2
         print("OK")
     finally:
         TRACKER_FILE = orig

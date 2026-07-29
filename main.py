@@ -23,16 +23,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.news_fetcher      import fetch_news
-from src.content_formatter import format_caption, format_image_brief, judge_stories
+from src.news_fetcher      import fetch_news, same_event
+from src.content_formatter import format_caption, format_image_brief
 from src.image_creator     import create_post_image, save_image
-from src.facebook_poster   import post_to_facebook, post_reel_to_facebook
+from src.webhook_poster    import post_via_webhook
 from src.reel_creator      import create_reel
-from src.story_tracker     import is_posted, mark_posted, posts_today
+from src.story_tracker     import behind_pace, is_posted, mark_posted, posts_today
 
 
 def validate_config(dry_run: bool) -> None:
-    required = ["FB_PAGE_URL", "PEXELS_API_KEY"]
+    # Make.com is the only posting path now, so a missing webhook URL is fatal.
+    # Checked at startup rather than at the first post, so the daemon dies
+    # immediately instead of failing once a minute for five hours.
+    required = ["PEXELS_API_KEY", "MAKE_WEBHOOK_URL"]
     if dry_run:
         required = ["PEXELS_API_KEY"]
 
@@ -43,8 +46,7 @@ def validate_config(dry_run: bool) -> None:
         sys.exit(1)
 
 
-def _publish(story: dict, dry_run: bool, pexels_api_key: str,
-             page_name: str, fb_page_id: str, fb_access_token: str) -> bool:
+def _publish(story: dict, dry_run: bool, pexels_api_key: str, page_name: str) -> bool:
     """Create image and post (or save locally for dry-run). Returns True on success."""
     print(f"📰  {story['title'][:70]}")
     print(f"    Category : {story['category']}")
@@ -73,11 +75,8 @@ def _publish(story: dict, dry_run: bool, pexels_api_key: str,
         if create_reel(out_path, "dry_run_reel.mp4"):
             print("    [DRY RUN] Reel saved to dry_run_reel.mp4")
     else:
-        print("📤  Posting to Facebook…")
-        post_id = post_to_facebook(caption, image, fb_page_id, fb_access_token)
-        print(f"✅  Posted! Post ID: {post_id}\n")
-
-        # Reel posting disabled for now
+        print("📤  Posting to Facebook via Make.com…")
+        print(f"✅  {post_via_webhook(caption, image)}\n")
 
     mark_posted(story["id"])
     return True
@@ -86,26 +85,27 @@ def _publish(story: dict, dry_run: bool, pexels_api_key: str,
 def run(dry_run: bool = False, scheduled: bool = False) -> int:
     validate_config(dry_run)
 
-    fb_page_id        = os.getenv("FB_PAGE_ID", "")
-    fb_access_token   = os.getenv("FB_ACCESS_TOKEN", "")
     pexels_api_key    = os.getenv("PEXELS_API_KEY", "")
     page_name         = os.getenv("PAGE_NAME", "FOOTBALL NEWS")
-    posts_per_run     = int(os.getenv("POSTS_PER_RUN", "1"))
     breaking_threshold = int(os.getenv("BREAKING_THRESHOLD", "60"))
 
     mode = "scheduled" if scheduled else f"breaking-news (threshold={breaking_threshold})"
     print(f"⚽  Football Page Bot starting… [{mode}]\n")
 
     print("🔍  Fetching latest football news…")
-    stories = fetch_news(max_stories=50)
+    stories = fetch_news(max_stories=200)   # cap must exceed a day's supply or later feeds starve
 
     if not stories:
         print("    No stories found. Will retry next run.")
         return 0
 
-    # Filter to unseen stories only, sorted by score descending
+    # Newest first, strictly. Score decides *whether* a story is worth posting
+    # (the threshold below); publication time decides the order. The daemon
+    # re-polls every POLL_SECONDS, so a story that lands in the feed goes out
+    # on the next poll — within the minute — rather than queueing behind a
+    # higher-scoring item that has been sitting in the window for two hours.
     new_stories = [s for s in stories if not is_posted(s["id"])]
-    new_stories.sort(key=lambda s: s["score"], reverse=True)
+    new_stories.sort(key=lambda s: s["age_hours"])
 
     print(f"    Found {len(stories)} stories, {len(new_stories)} new.\n")
 
@@ -118,27 +118,41 @@ def run(dry_run: bool = False, scheduled: bool = False) -> int:
     delay_max = int(os.getenv("POST_DELAY_MAX", "35"))
 
     # Daily budget — hard cap across all runs (counter lives in posted_stories.json)
-    max_per_day = int(os.getenv("MAX_POSTS_PER_DAY", "15"))
+    max_per_day = int(os.getenv("MAX_POSTS_PER_DAY", "60"))
+    min_per_day = int(os.getenv("MIN_POSTS_PER_DAY", "10"))
     budget      = max_per_day - posts_today()
     if budget <= 0:
         print(f"📭  Daily budget reached ({max_per_day} posts today). Next run tomorrow.")
         return 0
     print(f"    Daily budget: {budget} of {max_per_day} posts remaining.")
 
-    # Keyword pre-filter → shortlist for the Groq judge
-    shortlist = [s for s in new_stories if s["score"] >= breaking_threshold][:20]
+    # Keyword score is the only filter. If we're behind the pace needed to hit
+    # the daily minimum, drop the threshold and take the best available story.
+    threshold = breaking_threshold
+    if behind_pace(min_per_day):
+        threshold = 0
+        print(f"    Behind pace for {min_per_day} posts/day — threshold relaxed.")
 
-    # Groq judges hot-news worthiness; falls back to keyword order if unavailable
-    min_rating = int(os.getenv("GROQ_MIN_RATING", "7"))
-    ratings    = judge_stories(shortlist)
-    if ratings is not None:
-        judged = [s for s in shortlist if ratings.get(s["id"], 0) >= min_rating]
-        judged.sort(key=lambda s: ratings[s["id"]], reverse=True)
-        print(f"    Groq judge: {len(judged)} of {len(shortlist)} rated ≥ {min_rating}.")
-        shortlist = judged
+    shortlist = [s for s in new_stories if s["score"] >= threshold][:20]
 
-    to_post = shortlist[:min(posts_per_run, budget)]
-    print(f"    Selected {len(to_post)} stories to post.\n")
+    # Collapse retellings of one event. BBC lists some stories under two URLs,
+    # so the id (a hash of the link) differs while the headline is identical —
+    # that is what put the same match on the page more than once.
+    deduped: list[dict] = []
+    for s in shortlist:
+        if any(same_event(s["title"], kept["title"]) for kept in deduped):
+            mark_posted(s["id"], count=False)   # suppress without spending budget
+            continue
+        deduped.append(s)
+    if len(deduped) < len(shortlist):
+        print(f"    Collapsed {len(shortlist) - len(deduped)} duplicate retelling(s).")
+    shortlist = deduped
+
+    # Everything that qualifies goes out this run, not one per poll. Two
+    # stories landing in the same minute both get queued here; the daily
+    # budget is the only thing that trims the tail.
+    to_post = shortlist[:budget]
+    print(f"    Queued {len(to_post)} story(s) to post.\n")
 
     posted_count = 0
     for story in to_post:
@@ -148,8 +162,7 @@ def run(dry_run: bool = False, scheduled: bool = False) -> int:
             time.sleep(delay)
 
         try:
-            ok = _publish(story, dry_run, pexels_api_key,
-                          page_name, fb_page_id, fb_access_token)
+            ok = _publish(story, dry_run, pexels_api_key, page_name)
             if ok:
                 posted_count += 1
         except Exception as exc:
@@ -180,23 +193,19 @@ def daemon() -> None:
     """Listen continuously: poll the feeds every POLL_SECONDS, post fresh
     worthy news immediately. Exits after MAX_RUNTIME_MIN so the next
     scheduled GitHub Actions job can take over (24/7 via chained jobs)."""
-    poll      = int(os.getenv("POLL_SECONDS", "60"))
-    max_min   = int(os.getenv("MAX_RUNTIME_MIN", "290"))
-    gap_min   = int(os.getenv("MIN_POST_GAP_MIN", "15"))
-    start     = time.time()
-    last_post = 0.0
+    poll    = int(os.getenv("POLL_SECONDS", "60"))
+    max_min = int(os.getenv("MAX_RUNTIME_MIN", "290"))
+    start   = time.time()
 
     print(f"👂  Daemon mode: polling every {poll}s for {max_min} min "
-          f"(min {gap_min} min between posts)\n")
+          f"(MAX_POSTS_PER_DAY is the only brake)\n")
 
     while time.time() - start < max_min * 60:
-        if time.time() - last_post >= gap_min * 60:
-            try:
-                if run() > 0:
-                    last_post = time.time()
-                    _commit_state()
-            except Exception as exc:
-                print(f"❌  Poll error: {exc}")
+        try:
+            if run() > 0:
+                _commit_state()
+        except Exception as exc:
+            print(f"❌  Poll error: {exc}")
         time.sleep(poll)
 
     print("👋  Runtime limit reached — exiting so the next job takes over.")
