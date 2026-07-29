@@ -6,11 +6,10 @@ Fetches the latest football news, creates a branded post image,
 and publishes it to a Facebook Page — all using free services.
 
 Usage:
-  python main.py                  # breaking-news mode: only post if score ≥ BREAKING_THRESHOLD
-  python main.py --scheduled      # scheduled mode: post best new story regardless of score
-  python main.py --dry-run        # fetch + score + create image; skip Facebook upload
-  python main.py --scheduled --dry-run
-  python main.py --preview        # show top 15 stories with scores; no posting, no images
+  python main.py --daemon         # 24/7: poll every POLL_SECONDS, post fresh news
+  python main.py                  # one pass: post whatever is new and qualifies
+  python main.py --dry-run        # fetch + score + create image; skip the upload
+  python main.py --preview        # show top 15 stories with scores; posts nothing
   python main.py --preview 30     # same but show top 30
 """
 
@@ -29,6 +28,12 @@ from src.image_creator     import create_post_image, save_image
 from src.webhook_poster    import post_via_webhook
 from src.reel_creator      import create_reel
 from src.story_tracker     import behind_pace, is_posted, mark_posted, posts_today
+
+
+def _threshold() -> int:
+    """Score a story must reach to be posted. One reader so --preview can
+    never disagree with what run() would actually do."""
+    return int(os.getenv("BREAKING_THRESHOLD", "50"))
 
 
 def validate_config(dry_run: bool) -> None:
@@ -82,15 +87,14 @@ def _publish(story: dict, dry_run: bool, pexels_api_key: str, page_name: str) ->
     return True
 
 
-def run(dry_run: bool = False, scheduled: bool = False) -> int:
+def run(dry_run: bool = False) -> int:
     validate_config(dry_run)
 
     pexels_api_key    = os.getenv("PEXELS_API_KEY", "")
     page_name         = os.getenv("PAGE_NAME", "FOOTBALL NEWS")
-    breaking_threshold = int(os.getenv("BREAKING_THRESHOLD", "60"))
+    breaking_threshold = _threshold()
 
-    mode = "scheduled" if scheduled else f"breaking-news (threshold={breaking_threshold})"
-    print(f"⚽  Football Page Bot starting… [{mode}]\n")
+    print(f"⚽  Football Page Bot starting… [threshold={breaking_threshold}]\n")
 
     print("🔍  Fetching latest football news…")
     stories = fetch_news(max_stories=200)   # cap must exceed a day's supply or later feeds starve
@@ -213,7 +217,7 @@ def daemon() -> None:
 
 def preview(count: int = 15) -> None:
     """Show upcoming stories ranked by score. No images created, nothing posted."""
-    breaking_threshold = int(os.getenv("BREAKING_THRESHOLD", "55"))
+    breaking_threshold = _threshold()
 
     print(f"⚽  Football Page Bot — PREVIEW MODE  (threshold={breaking_threshold})\n")
     print("🔍  Fetching latest football news…")
@@ -256,8 +260,7 @@ def preview(count: int = 15) -> None:
 
 
 if __name__ == "__main__":
-    dry       = "--dry-run"   in sys.argv
-    scheduled = "--scheduled" in sys.argv
+    dry = "--dry-run" in sys.argv
 
     if "--daemon" in sys.argv:
         daemon()
@@ -269,4 +272,4 @@ if __name__ == "__main__":
             count = 15
         preview(count)
     else:
-        run(dry_run=dry, scheduled=scheduled)
+        run(dry_run=dry)
