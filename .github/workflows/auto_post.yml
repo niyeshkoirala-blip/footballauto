@@ -5,7 +5,13 @@ on:
     # BACKSTOP ONLY — the chain sustains itself via workflow_dispatch below.
     # If the chain ever dies, this revives it (cron can be hours late; the
     # self-dispatch at the end of each job is what keeps 24/7 coverage).
-    - cron: "3 */5 * * *"
+    #
+    # Daily, not 5-hourly. cancel-in-progress means every scheduled run kills
+    # the live daemon mid-post, which then dispatches a replacement that kills
+    # the scheduled run right back — 15s of churn and a dropped post, five
+    # times a day, for a revival nobody needed. MAX_RUNTIME_MIN already
+    # recycles the job every ~4.8h, so once a day is all the backstop it takes.
+    - cron: "17 5 * * *"
 
   # Trigger manually from GitHub → Actions tab, and how each job chains the next
   workflow_dispatch:
@@ -44,8 +50,8 @@ jobs:
           PEXELS_API_KEY:         ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
           PAGE_NAME:              ${{ secrets.PAGE_NAME }}
-          MAX_POSTS_PER_DAY:      "60"
-          MIN_POSTS_PER_DAY:      "10"
+          MAX_POSTS_PER_DAY:      "12"
+          MIN_POSTS_PER_DAY:      "4"
           BREAKING_THRESHOLD:     "50"
           MAX_AGE_MINUTES:        "30"
           POST_DELAY_MIN:         "25"

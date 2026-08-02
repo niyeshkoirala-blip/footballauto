@@ -487,6 +487,16 @@ def _pexels(queries: list[str], api_key: str) -> Image.Image | None:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
+def _earliest(names: dict, text: str) -> str | None:
+    """The name appearing earliest in the text — a headline's subject is
+    normally whoever it mentions first. Dict iteration order used to decide
+    this, which is arbitrary: it put Arsenal celebrating on an
+    "Aston Villa 2-1 Arsenal" card.
+    """
+    hits = [(text.index(key), key) for key in names if key in text]
+    return min(hits)[1] if hits else None
+
+
 def fetch_story_image(story: dict, pexels_api_key: str = "") -> Image.Image | None:
     """
     Return the most accurate, most current image for this story.
@@ -494,8 +504,12 @@ def fetch_story_image(story: dict, pexels_api_key: str = "") -> Image.Image | No
     """
     text = (story["title"] + " " + story.get("description", "")).lower()
 
-    player_key = next((k for k in PLAYER_FULL_NAMES if k in text), None)
-    team_key   = next((k for k in TEAM_FULL_NAMES   if k in text), None)
+    # A story that knows its own subject says so (match_fetcher names the
+    # winning side); otherwise fall back to reading the headline.
+    subject    = story.get("image_subject", "").lower()
+    player_key = _earliest(PLAYER_FULL_NAMES, text)
+    team_key   = (_earliest(TEAM_FULL_NAMES, subject) if subject else None) \
+                 or _earliest(TEAM_FULL_NAMES, text)
 
     # ── 1. RSS editorial image — journalist's own photo for this article ───────
     img = _rss_article_image(story)
