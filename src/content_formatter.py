@@ -61,7 +61,10 @@ def _groq_caption(story: dict, api_key: str) -> str | None:
             "- Write ONLY the caption. No preamble, no 'Here is the caption:'."
         )
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            # 70B is on the same free tier as the 8B-instant model this used to
+            # call, and writes noticeably better captions. If Groq retires it,
+            # `GET /openai/v1/models` lists what the key can still reach.
+            model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=600,
             temperature=0.75,

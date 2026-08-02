@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.news_fetcher      import fetch_news, same_event
+from src.match_fetcher     import fetch_matches
 from src.content_formatter import format_caption, format_image_brief
 from src.image_creator     import create_post_image, save_image
 from src.webhook_poster    import post_via_webhook
@@ -34,6 +35,17 @@ def _threshold() -> int:
     """Score a story must reach to be posted. One reader so --preview can
     never disagree with what run() would actually do."""
     return int(os.getenv("BREAKING_THRESHOLD", "50"))
+
+
+def _gather(max_stories: int) -> list[dict]:
+    """RSS news plus imminent kick-offs and fresh full-times. Both sources
+    yield the same story shape, so everything downstream is unchanged. One
+    reader, again so --preview cannot disagree with run()."""
+    news    = fetch_news(max_stories=max_stories)
+    matches = fetch_matches()
+    if matches:
+        print(f"    +{len(matches)} live fixture/result card(s).")
+    return news + matches
 
 
 def validate_config(dry_run: bool) -> None:
@@ -97,7 +109,7 @@ def run(dry_run: bool = False) -> int:
     print(f"⚽  Football Page Bot starting… [threshold={breaking_threshold}]\n")
 
     print("🔍  Fetching latest football news…")
-    stories = fetch_news(max_stories=200)   # cap must exceed a day's supply or later feeds starve
+    stories = _gather(200)   # cap must exceed a day's supply or later feeds starve
 
     if not stories:
         print("    No stories found. Will retry next run.")
@@ -221,7 +233,7 @@ def preview(count: int = 15) -> None:
 
     print(f"⚽  Football Page Bot — PREVIEW MODE  (threshold={breaking_threshold})\n")
     print("🔍  Fetching latest football news…")
-    stories = fetch_news(max_stories=100)
+    stories = _gather(100)
 
     if not stories:
         print("    No stories found.")
