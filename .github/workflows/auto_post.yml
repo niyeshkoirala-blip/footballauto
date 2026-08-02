@@ -50,6 +50,12 @@ jobs:
           PEXELS_API_KEY:         ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
           PAGE_NAME:              ${{ secrets.PAGE_NAME }}
+          # Reels post straight to the Graph API — free, no Make operations.
+          # Unset these two secrets and reels stay off; photos are unaffected.
+          FB_PAGE_ID:             ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN:   ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          REELS_PER_DAY:          "2"
+          REEL_MIN_SCORE:         "90"
           MAX_POSTS_PER_DAY:      "12"
           MIN_POSTS_PER_DAY:      "4"
           BREAKING_THRESHOLD:     "50"

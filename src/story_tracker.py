@@ -21,15 +21,17 @@ def _load() -> dict:
     if os.path.exists(TRACKER_FILE):
         with open(TRACKER_FILE) as f:
             tracker = json.load(f)
-            tracker.setdefault("daily", {})   # older files lack the key
+            tracker.setdefault("daily", {})   # older files lack the keys
+            tracker.setdefault("reels", {})
             return tracker
-    return {"posted": [], "daily": {}}
+    return {"posted": [], "daily": {}, "reels": {}}
 
 
 def _save(tracker: dict) -> None:
     tracker["posted"] = tracker["posted"][-MAX_ENTRIES:]
     # keep only the newest DAILY_KEEP day-counters
-    tracker["daily"] = dict(sorted(tracker["daily"].items())[-DAILY_KEEP:])
+    for counter in ("daily", "reels"):
+        tracker[counter] = dict(sorted(tracker[counter].items())[-DAILY_KEEP:])
     with open(TRACKER_FILE, "w") as f:
         json.dump(tracker, f, indent=2)
 
@@ -49,6 +51,18 @@ def behind_pace(min_per_day: int) -> bool:
     now     = datetime.now(timezone.utc)
     elapsed = (now.hour * 60 + now.minute) / 1440
     return posts_today() < min_per_day * elapsed
+
+
+def reels_today() -> int:
+    return _load()["reels"].get(_today(), 0)
+
+
+def mark_reel() -> None:
+    """Reels are counted separately from photo posts — a reel spends a slot in
+    both budgets, but REELS_PER_DAY is the tighter of the two."""
+    tracker = _load()
+    tracker["reels"][_today()] = tracker["reels"].get(_today(), 0) + 1
+    _save(tracker)
 
 
 def mark_posted(story_id: str, count: bool = True) -> None:
@@ -81,6 +95,14 @@ def _demo() -> None:
         assert not behind_pace(0)       # no minimum → never behind
         mark_posted("dup", count=False)               # suppressed, not published
         assert is_posted("dup") and posts_today() == 2
+
+        # Reels count on their own budget, and never disturb the post counter
+        assert reels_today() == 0
+        mark_reel(); mark_reel()
+        assert reels_today() == 2 and posts_today() == 2
+        t = _load(); t["reels"].update({"2000-01-01": 9, "2000-01-02": 9, "2000-01-03": 9})
+        _save(t)
+        assert "2000-01-01" not in _load()["reels"]   # pruned like daily
         print("OK")
     finally:
         TRACKER_FILE = orig

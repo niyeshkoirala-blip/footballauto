@@ -16,6 +16,7 @@ Usage:
 import os
 import random
 import sys
+import tempfile
 import time
 
 from dotenv import load_dotenv
@@ -27,8 +28,10 @@ from src.match_fetcher     import fetch_matches
 from src.content_formatter import format_caption, format_image_brief
 from src.image_creator     import create_post_image, save_image
 from src.webhook_poster    import post_via_webhook
+from src.graph_poster      import post_reel
 from src.reel_creator      import create_reel
-from src.story_tracker     import behind_pace, is_posted, mark_posted, posts_today
+from src.story_tracker     import (behind_pace, is_posted, mark_posted,
+                                   mark_reel, posts_today, reels_today)
 
 
 def _threshold() -> int:
@@ -91,11 +94,46 @@ def _publish(story: dict, dry_run: bool, pexels_api_key: str, page_name: str) ->
         print("🎬  Creating reel preview…")
         if create_reel(out_path, "dry_run_reel.mp4"):
             print("    [DRY RUN] Reel saved to dry_run_reel.mp4")
-    else:
+    elif not (_reel_wanted(story) and _publish_reel(caption, image)):
         print("📤  Posting to Facebook via Make.com…")
         print(f"✅  {post_via_webhook(caption, image)}\n")
 
     mark_posted(story["id"])
+    return True
+
+
+def _reel_wanted(story: dict) -> bool:
+    """Reels out-reach photo posts, but only the strongest story of the day is
+    worth the slot — and this needs a page token, since Make's free tier has no
+    operations to spare for video."""
+    if not (os.getenv("FB_PAGE_ID", "").strip()
+            and os.getenv("FB_PAGE_ACCESS_TOKEN", "").strip()):
+        return False
+    return (reels_today() < int(os.getenv("REELS_PER_DAY", "2"))
+            and story["score"] >= int(os.getenv("REEL_MIN_SCORE", "90")))
+
+
+def _publish_reel(caption: str, image) -> bool:
+    """Post the card as a Reel via the Graph API. False means the caller should
+    fall back to a photo post rather than drop the story entirely."""
+    tmp       = tempfile.gettempdir()
+    reel_src  = os.path.join(tmp, "reel_source.jpg")
+    reel_path = os.path.join(tmp, "reel.mp4")
+
+    save_image(image, reel_src)
+    print("🎬  Building reel…")
+    if not create_reel(reel_src, reel_path):
+        return False
+
+    try:
+        print("📤  Posting Reel to Facebook (Graph API — no Make ops)…")
+        video_id = post_reel(caption, reel_path)
+    except Exception as exc:
+        print(f"    Reel failed: {exc}\n    Falling back to a photo post.")
+        return False
+
+    mark_reel()
+    print(f"✅  Reel published (video {video_id})\n")
     return True
 
 
