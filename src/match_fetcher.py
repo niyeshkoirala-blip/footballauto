@@ -146,7 +146,8 @@ def fetch_matches(now: datetime | None = None) -> list[dict]:
                 stories.append(_story(event, "result", age))
 
         elif status["state"] == "pre":
-            # age_hours 0 sorts fixtures above news in main.run()
+            # age_hours 0 keeps fixtures first in _publication_order;
+            # main.run() also exempts these cards from the score cut.
             minutes_out = (kickoff - now).total_seconds() / 60
             if 0 <= minutes_out <= fixture_window * 60:
                 stories.append(_story(event, "fixture", 0.0))

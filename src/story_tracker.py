@@ -62,7 +62,11 @@ def relaxed_threshold(base: int, deficit: float) -> int:
     RELAX_FLOOR_PCT of base. Filler published under the page's own brand costs
     more than the post it replaces, so the floor is not negotiable — set
     RELAX_FLOOR_PCT=100 to disable relaxation, 0 for the old free-for-all."""
-    floor = base * int(os.getenv("RELAX_FLOOR_PCT", "80")) // 100
+    try:
+        pct = min(100, max(0, int(os.getenv("RELAX_FLOOR_PCT", "80"))))
+    except ValueError:                  # a typo must not take the daemon down
+        pct = 80
+    floor = base * pct // 100
     # min(base, ...) because a negative deficit would otherwise raise the bar.
     return min(base, max(floor, round(base - deficit * (base - floor))))
 
