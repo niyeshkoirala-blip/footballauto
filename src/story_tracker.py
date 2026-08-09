@@ -44,13 +44,27 @@ def posts_today() -> int:
     return _load()["daily"].get(_today(), 0)
 
 
-def behind_pace(min_per_day: int) -> bool:
-    """True when today's count is behind the pro-rata pace needed to reach
-    min_per_day by midnight UTC. The caller then drops the quality threshold
-    so the daily minimum is still met on quiet news days."""
+def behind_pace(min_per_day: int) -> float:
+    """How far today's count has fallen behind the pro-rata pace needed to
+    reach min_per_day by midnight UTC, as a fraction of the whole day's quota:
+    0.0 = on pace, 1.0 = nothing posted all day. A bare bool threw away the
+    only number the caller needs — how *badly* we are behind. 0.0 is falsy, so
+    `if behind_pace(...)` still reads the same."""
+    if min_per_day <= 0:
+        return 0.0
     now     = datetime.now(timezone.utc)
     elapsed = (now.hour * 60 + now.minute) / 1440
-    return posts_today() < min_per_day * elapsed
+    return max(0.0, elapsed - posts_today() / min_per_day)
+
+
+def relaxed_threshold(base: int, deficit: float) -> int:
+    """Quality bar lowered in proportion to `deficit`, never past
+    RELAX_FLOOR_PCT of base. Filler published under the page's own brand costs
+    more than the post it replaces, so the floor is not negotiable — set
+    RELAX_FLOOR_PCT=100 to disable relaxation, 0 for the old free-for-all."""
+    floor = base * int(os.getenv("RELAX_FLOOR_PCT", "80")) // 100
+    # min(base, ...) because a negative deficit would otherwise raise the bar.
+    return min(base, max(floor, round(base - deficit * (base - floor))))
 
 
 def reels_today() -> int:
@@ -92,7 +106,17 @@ def _demo() -> None:
         assert "2000-01-01" not in _load()["daily"]
         assert posts_today() == 2
         assert behind_pace(1000)        # 2 posts is behind any sane pace
-        assert not behind_pace(0)       # no minimum → never behind
+        assert behind_pace(0) == 0.0    # no minimum → never behind (still falsy)
+        deficit = behind_pace(1000)     # graded now, not a bool
+        assert isinstance(deficit, float) and 0.0 <= deficit < 1.0
+
+        # Relaxation is proportional and floored (floor = 60% of 50 = 30)
+        os.environ["RELAX_FLOOR_PCT"] = "60"
+        assert relaxed_threshold(50, 0.0) == 50    # on pace        → full bar
+        assert relaxed_threshold(50, 0.1) == 48    # barely behind  → barely relaxed
+        assert relaxed_threshold(50, 0.5) == 40    # half a day short
+        assert relaxed_threshold(50, 1.0) == 30    # nothing all day → floor
+        assert relaxed_threshold(50, 9.9) == 30    # never below the floor
         mark_posted("dup", count=False)               # suppressed, not published
         assert is_posted("dup") and posts_today() == 2
 
