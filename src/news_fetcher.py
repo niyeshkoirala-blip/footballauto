@@ -13,6 +13,7 @@ _MAJOR_TEAMS: list[str] = [
     # Premier League (all 20 current + common alternates)
     "arsenal", "chelsea", "liverpool", "manchester city", "manchester united",
     "tottenham", "spurs", "newcastle", "aston villa", "west ham", "brighton",
+    "man utd", "man united", "man city",
     "everton", "nottingham forest", "brentford", "fulham", "crystal palace",
     "wolves", "wolverhampton", "bournemouth", "leicester", "ipswich", "southampton",
     "luton", "burnley", "sheffield united", "sheffield wednesday", "leeds",
@@ -183,7 +184,7 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "full-time", "full time", "final whistle", "final score",
       "ft:", "ft ", "result:", "match report", "report:", "recap",
       "scoreline", "as it happened", "as it stood",
-      "on penalties", "penalty shootout", "penalty shootouts", "shootout", "shootouts",   # bare "penalties": features
+      "on penalties", "penalty shootout", "shootout",   # bare "penalties": features
       "after extra time", "extra time", "aet",
       "wins on penalties", "won on penalties", "lost on penalties",
       "win on penalties", "spot-kicks", "spot kicks",
@@ -210,7 +211,8 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
     # ── CONFIRMED TRANSFERS & SIGNINGS (~60 phrases) ──────────────────────────
     # "X sign Y" / "X buy Y" is how a confirmed deal is actually written, and
     # the -120 rumour penalty below is what stops "could sign" scoring here.
-    (["sign", "signs", "signing", "buy", "buys", "agree deal", "agrees deal", "agree a deal",
+    (["sign", "signs", "signing", "complete signing", "completes signing",
+      "buy", "buys", "agree deal", "agrees deal", "agree a deal",
       "has signed", "officially signed", "signs for", "sign for",
       "completes move", "completes transfer", "completes switch",
       "deal done", "done deal", "transfer confirmed", "transfer complete",
@@ -251,6 +253,17 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "100 million", "150 million", "200 million",
       "release clause", "buyout clause", "activated clause"], 25),
 
+    # ── DEATHS & TRIBUTES ─────────────────────────────────────────────────────
+    # There was no bucket for this: "Wolves legend Parkes dies aged 79" scored 26
+    # and "Diogo Jota dies in car crash aged 28" scored 10. Phrases are kept
+    # specific — bare "death"/"dead" fire on "sudden-death" and "dead ball".
+    (["dies aged", "dies at", "died aged", "died at", "dies after", "died after",
+      "dies in", "died in", "has died", "have died",
+      "passes away", "passed away", "death of", "dead at",
+      "tributes paid", "tributes to", "pays tribute", "mourns", "mourning",
+      "obituary", "funeral", "memorial", "killed in", "rip",
+      "remembered", "sudden death of", "found dead"], 40),
+
     # ── TROPHY / TITLE MOMENTS (~60 phrases) ──────────────────────────────────
     (["wins the title", "wins title", "wins league", "wins the league",
       "wins the cup", "wins cup", "wins trophy", "wins the trophy",
@@ -259,6 +272,8 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "league winners", "cup winners", "trophy winners",
       "are champions", "crowned champions", "crowned as champions",
       "lifts the trophy", "lifts the cup", "lifts the title",
+      "lift the trophy", "lift the cup", "lift the title",
+      "crowned the champions", "are crowned", "win the cup", "wins the cup",
       "lifts trophy", "raises trophy", "collects trophy",
       "clinches title", "clinches league", "clinches the double",
       "clinches treble", "secures title", "seals title", "wraps up title",
@@ -277,7 +292,8 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
 
     # ── MANAGER / COACHING CHANGES (~60 phrases) ───────────────────────────────
     (["sack", "sacks", "sacked", "fired", "dismissed", "axed", "relieved of duties",
-      "shown the door", "let go", "parted ways", "mutual consent",
+      "shown the door", "let go", "parted ways", "part ways", "part company",
+      "parts company", "mutual consent",
       "departure confirmed", "leaves the club", "exit confirmed",
       "out as manager", "out as coach", "manager leaves", "coach leaves",
       "head coach leaves", "boss leaves", "quits", "quit",
@@ -297,6 +313,19 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "technical director", "new backroom staff",
       "manager search over", "manager search", "seeking new manager",
       "new contract as manager", "extends as manager"], 35),
+
+    # ── SERIOUS INJURY / LONG BAN — clears the threshold alone ────────────────
+    # The generic injury bucket below fires once at +30 and so could never reach
+    # a threshold of 50 by itself: "ruled out for the season" scored 30 and never
+    # posted. A season-ender is a bigger story than most transfers.
+    (["season-ending", "career-threatening", "out for the season",
+      "ruled out for the season", "rest of the season", "months out",
+      "cruciate ligament", "acl tear", "torn acl", "acl injury",
+      "torn ligament", "ligament damage", "ruptured",
+      "broken leg", "broken ankle", "double leg break",
+      "undergoes surgery", "surgery required", "operation confirmed",
+      "lifetime ban", "doping ban", "drugs ban", "tested positive",
+      "banned for", "suspended for", "four-year ban", "eight-month ban"], 50),
 
     # ── INJURIES, HEALTH & SUSPENSIONS (~80 phrases) ───────────────────────────
     (["ruled out", "ruled out for", "out for", "sidelined",
@@ -574,6 +603,12 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
 # Regex to detect a scoreline anywhere in the text, e.g. "2-1", "3–0"
 _SCORELINE_RE = re.compile(r'\b\d{1,2}[-–]\d{1,2}\b')
 
+# "lift the Czech Cup", "lifted the Scottish Cup" — an adjective splits every
+# fixed phrase, and bare "lift the" scored "lift the mood" and "lift the lid"
+# as trophies. One small gap-tolerant regex is the honest way to say this.
+_TROPHY_LIFT_RE = re.compile(
+    r"\blift(s|ed|ing)?\s+(the\s+)?(\S+\s+){0,2}(cup|trophy|title|shield|silverware)\b")
+
 from functools import lru_cache
 
 _WORD_EDGE = re.compile(r"\w").match
@@ -589,6 +624,8 @@ def _phrase_re(phrases) -> re.Pattern:
     Longest phrase first so "cristiano ronaldo" wins over "ronaldo" and the
     pair counts as one name instead of two.
     """
+    if isinstance(phrases, str):        # a bare str would match char-by-char
+        phrases = [phrases]
     body = "|".join(
         (r"\b" if _WORD_EDGE(p) else "") + re.escape(p)
         + (r"\b" if _WORD_EDGE(p[-1]) else "")
@@ -857,6 +894,10 @@ def score_story(title: str, description: str = "") -> int:
         score += 15
         if _TRACE is not None: _TRACE.append((15, "", "scoreline"))
 
+    if _TROPHY_LIFT_RE.search(text):
+        score += 35
+        if _TRACE is not None: _TRACE.append((35, "", "trophy-lift"))
+
     # Hall-of-Fame superstars: first name +40, each extra one half the last
     hof = set(_HOF_RE.findall(text))
     score += _name_points(hof, 40)
@@ -909,7 +950,7 @@ def _bucket_label(phrase: str) -> str:
 
 # Single source by choice: BBC Sport football. Every entry is reliably dated,
 # football-only, never paywalled, and carries a high-res editorial image we can
-# upgrade to /976/. Multi-source meant the same match posted five times over.
+# upgrade to /1536/. Multi-source meant the same match posted five times over.
 RSS_FEEDS = [
     {"url": "https://feeds.bbci.co.uk/sport/football/rss.xml",   "source": "BBC Sport"},
 ]
@@ -1048,6 +1089,10 @@ _STOP_WORDS = {
     "during", "over", "under", "still", "out", "up", "down", "back",
     "into", "that", "this", "says", "said", "new", "how", "why",
     "what", "who", "who", "do", "not", "no", "all", "be", "been",
+    # Football filler nouns. They carry no event identity but counted toward
+    # same_event's overlap: "Chelsea star ruled out" and "Chelsea star returns
+    # to training" shared {chelsea, star} and collapsed into one story.
+    "star", "boss", "ace", "side", "man", "player", "team",
 }
 
 
@@ -1224,7 +1269,7 @@ def _extract_rss_image(entry: dict) -> str:
     Pull the article's own editorial image URL directly from the RSS entry.
 
     Priority per source:
-      BBC Sport   → media_thumbnail   (upgrade /240/ → /976/ for high-res)
+      BBC Sport   → media_thumbnail   (upgrade /240/ → /1536/ for high-res)
       Guardian    → media_content     (pick widest available)
       Sky Sports  → links[rel=enclosure, type=image/*]
       Generic     → enclosures / <img> in summary HTML
@@ -1238,6 +1283,9 @@ def _extract_rss_image(entry: dict) -> str:
             # the CPS asset bucket, and rewriting it 404s 16% of the feed.
             # 1536 not 976: the photo box is 1080x760, so 976 came out upscaled.
             url = re.sub(r'/\d{2,4}/', '/1536/', url, count=1)
+            # /images/ic/240x135/ is a second BBC shape with no bare size
+            # segment; unrewritten it reaches the 1080-wide canvas at 240px.
+            url = re.sub(r'/ic/\d{2,4}x\d{2,4}/', '/ic/1536x864/', url, count=1)
             return url
 
     # Guardian / ESPN — media_content; pick highest resolution
@@ -1281,7 +1329,6 @@ def _extract_rss_image(entry: dict) -> str:
 _TEAM_RE = re.compile(
     r'\b(' + '|'.join(sorted(map(re.escape, _MAJOR_TEAMS), key=len, reverse=True)) + r')\b')
 
-
 def _event_key(t: str) -> tuple[frozenset, frozenset]:
     """(teams named, scorelines) — the cheap identity of one football event."""
     low = t.lower()
@@ -1315,8 +1362,15 @@ def same_event(a: str, b: str) -> bool:
     # different stories. Since a collapse here deletes a story permanently,
     # require the wording to agree too — or both sides to carry the same score.
     overlap = len(ta & tb) / min(len(ta), len(tb))
+    # A three-token headline is mostly club names, so 0.5 overlap is nearly
+    # free: "Arsenal beat Chelsea 2-1" vs "Arsenal charged over Chelsea clash"
+    # hits 0.67 on the two club names alone and used to collapse — deleting a
+    # story permanently. Demand more of the terse ones. Four tokens keeps the
+    # genuine "Liverpool sign Isak" / "Isak completes Liverpool move" pair,
+    # which sits at exactly 0.5.
+    need = 0.75 if min(len(ta), len(tb)) <= 3 else 0.5
     if team_a == team_b and team_a and (
-            (len(team_a) > 1 and overlap >= 0.5) or (score_a and score_b)):
+            (len(team_a) > 1 and overlap >= need) or (score_a and score_b)):
         return True                        # same cast, no contradicting score
     if (team_a - team_b) and (team_b - team_a):
         return False                       # each names a club the other doesn't
@@ -1324,7 +1378,7 @@ def same_event(a: str, b: str) -> bool:
         return False                       # one swapped word each: sign a striker
                                            # vs sign a goalkeeper is two transfers
     # Jaccard over the smaller headline: tolerates one outlet being wordier.
-    return len(ta & tb) / min(len(ta), len(tb)) >= 0.5
+    return overlap >= need
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -1494,7 +1548,7 @@ def _demo() -> None:
     assert _name_points({"ronaldo"}, 40) == 40
     assert _name_points({"ronaldo", "cristiano ronaldo"}, 40) == 40  # one man
     assert _name_points({"messi", "haaland"}, 40) == 60              # two men
-    assert _name_points({str(i) for i in range(12)}, 40) < 80          # capped
+    assert _name_points({"a%d" % i for i in range(12)}, 40) == 79      # capped at 2*first
     assert isinstance(score_story("Arsenal beat Chelsea 2-1"), int)
     assert score_story("") == 0
     assert score_story("Arsenal beat Chelsea 2-1") > score_story(
@@ -1592,6 +1646,44 @@ def _demo() -> None:
     for _p in ("win", "draw", "exit", "down", "goal", "final", "says", "claims",
                "book", "held", "lost", "son", "gabriel", "kane", "rice", "diaz"):
         assert not any(_p in phrases for phrases, _ in _BREAKING_SIGNALS), _p
+    # deaths: no bucket existed, so every obituary scored ~20 and never posted
+    assert score_story("Wolves legend Parkes dies aged 79") >= 50
+    assert score_story("Diogo Jota dies in car crash aged 28") >= 50
+    assert score_story("Tributes paid after former Celtic captain passes away") >= 50
+    # ...but the death phrases stay specific: "sudden-death" and "dead ball"
+    # are football, not obituaries (which is why bare "death"/"dead" are out).
+    assert not _phrase_re(["dies aged", "death of", "dead at", "has died"]).search(
+        "a sudden-death shootout from a dead ball")
+
+    # a season-ender clears the bar on its own; the generic bucket did not
+    assert score_story("Rodri ruled out for the season") >= 50
+    assert score_story("Striker out for the season with cruciate ligament damage") >= 50
+    assert score_story("Toney banned for eight months over betting breaches") >= 50
+
+    # singular/plural gaps that word-boundary matching made fatal
+    assert score_story("Slavia Prague lift the Czech Cup") >= 50
+    assert score_story("Everton sack manager Sean Dyche") >= 50
+    assert score_story("Tottenham part ways with Ange Postecoglou") >= 50
+    assert score_story("Arsenal complete signing of Isak from Newcastle") >= 50
+    # ...but a tactical feature must not read as a result
+    assert score_story("Should teams bring on players just for penalty shootouts?") < 50
+
+    # short headlines: two shared club names are ~0.67 overlap on their own, so
+    # the un-padded form of this pair used to collapse and delete a story
+    assert not same_event("Arsenal beat Chelsea 2-1",
+                          "Arsenal charged by FA over Chelsea clash")
+    assert not same_event("Ronaldo signs new Al-Nassr deal", "Ronaldo leaves Al-Nassr")
+    assert not same_event("Chelsea star ruled out for season",
+                          "Chelsea star returns to training")
+
+    # a bare string used to compile to a per-character alternation
+    assert _phrase_re("win").search("spurs win late")
+    assert not _phrase_re("win").search("a new day")
+
+    # the second BBC image shape carries its size as WxH, not a bare segment
+    assert _extract_rss_image({"media_thumbnail": [{"url":
+        "https://ichef.bbci.co.uk/images/ic/240x135/p0mmh2yg.jpg"}]}) == (
+        "https://ichef.bbci.co.uk/images/ic/1536x864/p0mmh2yg.jpg")
     print("OK")
 
 

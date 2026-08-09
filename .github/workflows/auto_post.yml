@@ -59,6 +59,7 @@ jobs:
           MAX_POSTS_PER_DAY:      "12"
           MIN_POSTS_PER_DAY:      "4"
           BREAKING_THRESHOLD:     "50"
+          RELAX_FLOOR_PCT:        "80"
           MAX_AGE_MINUTES:        "30"
           POST_DELAY_MIN:         "25"
           POST_DELAY_MAX:         "35"

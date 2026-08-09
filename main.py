@@ -216,7 +216,12 @@ def run(dry_run: bool = False) -> int:
 
     # Everything that survived the cuts goes out this run, not one per poll,
     # and in publication order — newest first (see _publication_order).
-    to_post = _publication_order(shortlist[:budget])
+    # Match cards are time-critical and score a flat 55, so ranking by score
+    # buried them behind news on a busy matchday. They take the budget first;
+    # `_gather` only ever emits a handful and they are worthless once stale.
+    cards = [s for s in shortlist if s["id"].startswith(("fixture-", "result-"))]
+    rest  = [s for s in shortlist if s not in cards]
+    to_post = _publication_order((cards + rest)[:budget])
     print(f"    Queued {len(to_post)} story(s) to post.\n")
 
     posted_count = 0
@@ -291,7 +296,8 @@ def _why(story: dict) -> None:
     rows = explain_story(title, desc)
     for source, header in (("title", f"title {title_score:>4}"),
                            ("desc",  f"desc  {desc_score:>+4} (//3 of "
-                                     f"{sum(p for p, _, _, s in rows if s == 'desc')})")):
+                                     f"{max(0, sum(p for p, _, _, s in rows if s == 'desc'))}"
+                                     f"{', clamped' if sum(p for p, _, _, s in rows if s == 'desc') < 0 else ''})")):
         terms = [f"{t} {p:+}" + (f" “{ph}”" if ph and ph != t else "")
                  for p, ph, t, s in rows if s == source]
         if terms:

@@ -25,9 +25,11 @@ BBC RSS ──poll 60s──▶ filter ──▶ image + caption ──▶ Make.
 Every story that clears the filter in a given poll is queued, so two stories
 landing in the same minute both go out (spaced 25–35 s apart).
 
-Volume is bounded at both ends: **at least 10 posts/day** (if the bot falls
-behind pace the score threshold drops to 0 so the floor is still met) and **at
-most 60/day**. In practice BBC supplies ~22 qualifying stories/day.
+Volume is bounded at both ends: **at least 4 posts/day** (if the bot falls
+behind pace the score threshold is lowered in proportion to the shortfall, but
+never below `RELAX_FLOOR_PCT`% of `BREAKING_THRESHOLD` — 80% by default, so a
+relaxed run still refuses filler) and **at most 12/day**. In practice BBC
+supplies ~12 qualifying stories/day, so the relaxation does engage.
 
 Each post is a branded 1080×1350 image with the headline overlaid, plus an
 AI-written caption (hook, context, fan question, hashtags, source credit).
