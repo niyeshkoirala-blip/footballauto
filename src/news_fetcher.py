@@ -4,8 +4,9 @@ import feedparser
 
 # ── Breaking-news significance scoring ────────────────────────────────────────
 # Each tuple: (list of trigger phrases, points awarded)
-# Score is capped at 100. Threshold for immediate posting is set via
-# BREAKING_THRESHOLD env var (default 60).
+# Each bucket fires at most once; the two name terms are deduped and taper
+# (see _name_points). Threshold for immediate posting is BREAKING_THRESHOLD
+# (default 50, main.py).
 
 # ── All clubs from the top 5 leagues + major European/international sides ──────
 _MAJOR_TEAMS: list[str] = [
@@ -72,13 +73,14 @@ _MAJOR_TEAMS: list[str] = [
 
 _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
 
-    # ── WORLD CUP — TOP PRIORITY (+200) ───────────────────────────────────────
-    # Any World Cup story instantly dominates the rankings.
-    (["world cup", "fifa world cup", "world cup 2026", "wc clash",
-      "world cup match", "world cup final", "world cup knockout",
-      "world cup group", "world cup last", "world cup round",
-      "at the world cup", "in the world cup", "world cup star",
-      "world cup daily", "world cup glory", "wc round", "wc final"], 200),
+    # ── WORLD CUP MATCH — TOP PRIORITY (+200) ─────────────────────────────────
+    # Only an actual World Cup fixture dominates. Bare "world cup" fired on 8 of
+    # 63 live BBC stories and not one was a match: a prize-money explainer, a
+    # quiz, "how to follow the season". A passing mention is already worth +20
+    # under MAJOR COMPETITION NAMES; that is what a mention is worth.
+    (["wc clash", "world cup match", "world cup final", "world cup knockout",
+      "world cup group", "world cup round", "world cup last 16",
+      "world cup glory", "wc round", "wc final"], 200),
 
     # ── MATCH RESULT — HIGH PRIORITY (+150) ───────────────────────────────────
     # An actual finished game (one team beats another / a draw) ranks near the top.
@@ -86,7 +88,11 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
     ([
       # — win verbs —
       "beats", "beat", "beaten", "defeated", "defeats", "defeat",
-      "won", "wins", "winning", "win over", "wins over", "won against",
+      "won", "wins", "win over", "wins over", "won against", "win against",
+      # bare "win" is a whole-page false positive ("must-win", "win the race for
+      # his signature"); "winning" is "winning streak/mentality". Spell out the
+      # forms that only a finished game produces.
+      "win at", "win the final", "win the cup", "win the league", "win the title",
       "victory", "victories", "victorious", "victory over",
       "overcome", "overcomes", "overcame",
       "triumph", "triumphs", "triumphed", "triumphant",
@@ -94,11 +100,10 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "topple", "topples", "toppled",
       "see off", "sees off", "saw off", "seen off",
       "dispatch", "dispatches", "dispatched",
-      "oust", "ousts", "ousted",
       "stun", "stuns", "stunned",
-      "shock", "shocks", "shocked",
-      "upset", "upsets",
-      "down", "downs", "downed",
+      # "shock"/"upset"/"down" alone are not results: "shock move", "upset fans",
+      # and "break down" — which is what handed a World Cup prize-money quiz +150.
+      "shock win", "shock defeat", "shock result", "downed",
       "run riot",
       # — beat 'past' phrasings —
       "ease past", "eases past", "eased past",
@@ -115,7 +120,8 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "sweep aside", "sweeps aside", "swept aside",
       "put to the sword",
       # — narrow win —
-      "edge", "edges", "edged", "edge out", "edges out", "edged out",
+      # bare "edge(s)" is "edge closer to a deal" — a rumour, scoring +150.
+      "edged", "edge out", "edges out", "edged out",
       "pip", "pips", "pipped", "nick", "nicks", "nicked",
       "snatch", "snatches", "snatched", "snatch win", "snatch victory",
       "late win", "late winner", "last-minute winner",
@@ -137,7 +143,6 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "demolish", "demolishes", "demolished",
       "crush", "crushes", "crushed",
       "destroy", "destroys", "destroyed",
-      "smash", "smashes", "smashed",
       "batter", "batters", "battered",
       "maul", "mauls", "mauled",
       "thump", "thumps", "thumped", "thumping",
@@ -157,16 +162,16 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "dominate", "dominates", "dominated",
       "ran riot", "five-star", "six-star", "seven-star",
       "put four past", "put five past", "put six past",
-      # — draws —
-      "draw", "draws", "drew", "drawn",
-      "draw with", "drew with", "draws with",
+      # — draws — (bare "draw" is the cup draw: "EFL Cup second-round draw" +150)
+      "drew", "draw with", "drew with", "draws with",
       "stalemate", "goalless", "goalless draw",
       "nil-nil", "all square", "honours even", "honours shared",
       "share spoils", "share the spoils", "share points", "share the points",
-      "held", "held to a draw", "held by", "held to",
+      "held to a draw", "held to",   # bare "held": "talks held", "record held by"
       "shared the points", "deadlock", "deadlocked",
       # — losses (still a result) —
-      "lose", "loses", "lost", "losing", "loss",
+      "lose", "loses", "lose to", "loses to", "lost to",
+      # "lost"/"loss"/"losing" are not results: "lost its shine", "loss of form".
       "suffer defeat", "suffers defeat", "suffer loss", "suffers loss",
       "go down", "goes down", "went down",
       "fall to", "falls to", "fell to",
@@ -178,7 +183,7 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "full-time", "full time", "final whistle", "final score",
       "ft:", "ft ", "result:", "match report", "report:", "recap",
       "scoreline", "as it happened", "as it stood",
-      "on penalties", "penalty shootout", "penalties", "shootout",
+      "on penalties", "penalty shootout", "penalty shootouts", "shootout", "shootouts",   # bare "penalties": features
       "after extra time", "extra time", "aet",
       "wins on penalties", "won on penalties", "lost on penalties",
       "win on penalties", "spot-kicks", "spot kicks",
@@ -186,7 +191,9 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "advance", "advances", "advanced", "advance to",
       "progress", "progresses", "progressed", "progress to",
       "through to", "go through", "goes through", "went through",
-      "book", "books", "booked", "book place", "book spot", "book ticket",
+      # "booked" is a yellow card and "book" is a betting book — only the idiom
+      # means a team went through, and it is always written with a possessive.
+      "book their place", "books their place", "booked their place", "book a place",
       "reach final", "reaches final", "reached final",
       "reach the final", "into the final", "into the last",
       "qualify", "qualifies", "qualified",
@@ -196,12 +203,15 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "bow out", "bows out", "bowed out",
       "dumped out", "dump out", "knocked out of",
       "eliminated", "eliminate", "eliminates", "elimination",
-      "exit", "exits", "exited", "sent packing", "sent home",
+      "sent packing", "sent home",   # "exit": "Who will exit Chelsea?" is a rumour
       "out of the world cup", "out of the cup", "out of the competition",
      ], 150),
 
     # ── CONFIRMED TRANSFERS & SIGNINGS (~60 phrases) ──────────────────────────
-    (["has signed", "officially signed", "signs for", "sign for",
+    # "X sign Y" / "X buy Y" is how a confirmed deal is actually written, and
+    # the -120 rumour penalty below is what stops "could sign" scoring here.
+    (["sign", "signs", "signing", "buy", "buys", "agree deal", "agrees deal", "agree a deal",
+      "has signed", "officially signed", "signs for", "sign for",
       "completes move", "completes transfer", "completes switch",
       "deal done", "done deal", "transfer confirmed", "transfer complete",
       "transfer completed", "move confirmed", "move completed",
@@ -217,11 +227,11 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "new signing", "new recruit", "first signing", "latest signing",
       "seals move", "seals transfer", "seals deal", "seals signing",
       "secures signing", "wraps up signing", "wraps up deal",
-      "lands", "snaps up", "swoops for", "clinches signing",
+      "snaps up", "swoops for", "clinches signing",   # "lands": "lands in trouble"
       "ties down", "loaned out", "loan confirmed", "loan completed",
       "loan deal", "loan move", "loan signing", "returns on loan",
       "permanent deal", "permanent transfer", "permanent switch",
-      "rejoins", "re-signs", "returns to",
+      "rejoins", "re-signs",   # "returns to" is "returns to training/form/fitness"
       "option to buy", "obligation to buy", "buy option triggered",
       "bumper deal", "long-term deal", "five-year deal", "four-year deal",
       "three-year deal", "two-year deal"], 40),
@@ -253,11 +263,11 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "clinches title", "clinches league", "clinches the double",
       "clinches treble", "secures title", "seals title", "wraps up title",
       "retains title", "defends title", "defends successfully",
-      "back-to-back", "three-peat", "four in a row",
+      "three-peat", "four in a row",   # "back-to-back defeats/fixtures" too
       "successive title", "consecutive title", "consecutive win",
       "double winners", "treble winners", "quadruple",
       "historic win", "historic victory", "makes history", "creates history",
-      "glory", "triumph", "triumphant", "victorious", "glorious",
+      "glory", "glorious",   # triumph/triumphant/victorious are in the +150 bucket
       "perfect season", "unbeaten season", "invincible",
       "domestic title", "european title", "world champions",
       "ballon d'or", "golden boot", "player of the year",
@@ -266,7 +276,7 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "champions!", "title!", "glory!", "trophy!"], 35),
 
     # ── MANAGER / COACHING CHANGES (~60 phrases) ───────────────────────────────
-    (["sacked", "fired", "dismissed", "axed", "relieved of duties",
+    (["sack", "sacks", "sacked", "fired", "dismissed", "axed", "relieved of duties",
       "shown the door", "let go", "parted ways", "mutual consent",
       "departure confirmed", "leaves the club", "exit confirmed",
       "out as manager", "out as coach", "manager leaves", "coach leaves",
@@ -322,65 +332,33 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "red card", "sent off", "second yellow", "straight red",
       "violent conduct", "headbutt"], 30),
 
-    # ── KNOCKOUT STAGES & COMPETITIONS (~60 phrases) ───────────────────────────
-    (["final", "cup final", "league final", "grand final",
+    # ── KNOCKOUT ROUND REACHED (~20 phrases) ───────────────────────────────────
+    # Round names only. Every progression verb this used to hold ("knocked out",
+    # "crash out", "advance to", "through to", "exit") is verbatim in the +150
+    # result bucket, and its 19 cup names are verbatim in MAJOR COMPETITION
+    # NAMES below — so one knockout tie used to collect 25 points three times.
+    # Bare "final" and "play-off" are gone too: they scored a World Cup
+    # third-place-play-off quiz.
+    (["cup final", "league final", "grand final",
+      "play-off final", "playoff final", "playoff winner",
       "semi-final", "semifinals", "last four",
       "quarter-final", "quarterfinals", "last eight",
-      "last 16", "round of 16", "last 32", "round of 32",
-      "last 64", "group stage exit", "group stage elimination",
-      "knocked out", "knocked out of", "knock out",
-      "eliminated", "eliminate", "crash out", "crashes out",
-      "bows out", "bow out", "exit",
-      "advance to", "advances to", "progress to", "progresses to",
-      "through to", "qualify for", "qualifies for", "qualification",
-      "reaches the final", "reach the final", "into the final",
-      "makes the final", "makes it to the final",
-      "play-off", "playoff", "playoff final", "playoff winner",
-      "fa cup", "carabao cup", "efl cup", "community shield",
-      "copa del rey", "dfb-pokal", "coppa italia", "coupe de france",
-      "supercopa", "supercoppa", "super cup", "club world cup",
-      "intercontinental cup", "champions trophy",
-      "afcon", "african cup", "gold cup", "concacaf gold cup",
-      "u21 championship", "u23 championship",
-      "world cup qualifier", "world cup qualifying",
-      "european qualifier", "euro qualifier"], 25),
+      "last 16", "round of 16", "last 32", "round of 32", "last 64",
+      "group stage exit", "group stage elimination"], 25),
 
-    # ── MATCH RESULTS (~80 phrases) ────────────────────────────────────────────
-    (["beats", "beat", "beaten", "defeated", "defeats",
-      "won", "win", "victory", "wins match", "wins game",
-      "draws with", "drew", "draw", "stalemate", "goalless draw",
-      "nil-nil", "all square", "share spoils", "share the points",
-      "held to a draw", "held by",
-      "equalises", "equalizer", "equalised",
-      "thrash", "thrashes", "hammers", "hammer",
-      "rout", "routed", "routing",
-      "demolish", "demolishes", "demolished",
-      "crush", "crushes", "crushed",
-      "destroy", "destroys", "destroyed",
-      "outclass", "outclasses", "outclassed",
-      "overpower", "overpowers", "overpowered",
-      "edge", "edges", "edged",
-      "pip", "pips", "pipped",
-      "snatch", "snatches", "snatched",
-      "claim", "claims point", "claims all three points",
-      "thumping win", "convincing win", "comfortable win",
-      "narrow win", "hard-fought win",
-      "last-minute winner", "late winner", "injury-time winner",
-      "stoppage-time winner", "winner in injury time",
-      "comeback win", "comeback victory", "stunning comeback",
-      "penalty shootout", "on penalties", "won on penalties",
-      "lost on penalties", "extra time", "aet",
-      "five-star", "six-star", "seven-star",
-      "clean sheet", "shutout", "kept clean sheet",
-      "match report", "full-time result", "full time",
-      "final score", "ft:", "result:"], 25),
+    # (a second MATCH RESULTS bucket lived here. 69 of its 89 phrases were
+    #  verbatim copies from the +150 bucket above, so 62% of the stories that
+    #  scored a result scored it twice — 175, not 150 — and the leftovers were
+    #  "win", "claim", "draw", which fire on any football sentence at all.)
 
     # ── IN-MATCH ACTION & GOALS (~70 phrases) ──────────────────────────────────
-    (["scores", "scored", "goal", "goals",
-      "leads", "lead", "takes the lead", "go ahead",
+    # No bare "goal(s)"/"lead(s)"/"puts"/"saved"/"double": they fire on ordinary
+    # football prose — "our goal is", "leads tributes", "puts pressure on",
+    # "saved his job", "the Double" — and paid every story the same 20 points.
+    (["scores", "scored", "takes the lead", "go ahead",
       "opener", "opens the scoring", "breaks the deadlock",
       "levels", "levelled", "equalises", "pulls level",
-      "puts", "pounces", "taps in", "slots in",
+      "pounces", "taps in", "slots in",
       "finishes", "strikes", "fires", "blasts",
       "curls", "chips", "lobs", "flicks",
       "volley", "half-volley", "overhead kick", "bicycle kick",
@@ -395,10 +373,10 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "free-kick goal", "free kick goal",
       "penalty", "spot kick", "penalty converted",
       "penalty saved", "penalty missed", "penalty stopped",
-      "penalty retaken", "saved", "keeper saves",
+      "penalty retaken", "keeper saves",
       "own goal", "own-goal",
       "keeper error", "goalkeeper error", "howler", "blunder",
-      "hat-trick", "brace", "double", "treble", "four goals",
+      "hat-trick", "brace", "treble", "four goals",
       "five goals",
       "var", "var check", "var overturns", "var review",
       "goal given", "goal disallowed", "disallowed goal",
@@ -438,14 +416,14 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
     # ── TOP PLAYERS (~80 names) ───────────────────────────────────────────────
     (["mbappe", "haaland", "bellingham", "vinicius", "vinicius jr",
       "salah", "ronaldo", "cristiano", "messi", "lionel messi",
-      "de bruyne", "kevin de bruyne", "rodri", "kane", "harry kane",
+      "de bruyne", "kevin de bruyne", "rodri", "harry kane",
       "lewandowski", "robert lewandowski", "modric", "luka modric",
       "benzema", "karim benzema", "saka", "bukayo saka",
       "yamal", "lamine yamal", "pedri", "gavi",
       "ter stegen", "alisson", "ederson", "courtois",
       "neuer", "oblak", "donnarumma",
       "van dijk", "virgil van dijk", "trent", "trent alexander-arnold",
-      "son", "son heung-min", "rashford", "marcus rashford",
+      "son heung-min", "rashford", "marcus rashford",
       "foden", "phil foden", "palmer", "cole palmer",
       "neymar", "dembele", "ousmane dembele",
       "osimhen", "victor osimhen", "lukaku", "romelu lukaku",
@@ -460,11 +438,11 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "goretzka", "muller", "thomas muller",
       "mac allister", "alexis mac allister",
       "gravenberch", "ryan gravenberch",
-      "diaz", "luis diaz", "gakpo", "cody gakpo",
+      "luis diaz", "gakpo", "cody gakpo",
       "nunez", "darwin nunez", "watkins", "ollie watkins",
       "isak", "alexander isak", "gordon", "anthony gordon",
       "martinelli", "gabriel martinelli",
-      "rice", "declan rice", "havertz", "kai havertz",
+      "declan rice", "havertz", "kai havertz",
       "odegaard", "martin odegaard",
       "griezmann", "antoine griezmann",
       "thuram", "marcus thuram",
@@ -474,7 +452,7 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "hojlund", "rasmus hojlund",
       "guimaraes", "bruno guimaraes",
       "trippier", "kieran trippier",
-      "gabriel jesus", "gabriel", "gabriel magalhaes",
+      "gabriel jesus", "gabriel magalhaes",
       "saliba", "william saliba",
       "maguire", "harry maguire",
       "pickford", "jordan pickford"], 10),
@@ -486,7 +464,7 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "breaks silence", "addresses", "responds to", "reacts to",
       "tells reporters", "tells press", "tells media",
       "press conference", "post-match interview", "pre-match interview",
-      "says", "insists", "claims", "confirms", "denies",
+      "insists", "confirms", "denies",   # "says"/"claims": every quote sentence
       "comments on", "speaks about", "talks about", "discusses",
       "shares thoughts", "gives update", "provides update",
       "statement from", "official statement",
@@ -511,9 +489,9 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "team news", "predicted lineup", "predicted starting xi",
       "expected lineup", "starting xi", "who will start",
       "form guide", "head to head", "h2h",
-      "prediction", "tips", "betting odds",
-      "saturday", "sunday", "monday", "tuesday",
-      "wednesday", "thursday", "friday"], 20),
+      # No weekday names: they gave +20 to "Sunday's gossip" and to any story
+      # that happens to mention when something takes place.
+      "prediction", "tips", "betting odds"], 20),
 
     # ── ANALYSIS, FEATURES & RANKINGS (~45 phrases) ────────────────────────────
     (["ranked", "ranking", "rankings", "best of",
@@ -539,12 +517,12 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
 
     # ── PLAYER FORM, FITNESS & GENERAL NEWS (~35 phrases) ──────────────────────
     (["in form", "out of form", "good form", "poor form",
-      "return", "returns", "comeback", "back in action",
+      "returns from injury", "return from injury", "back in action",
       "fit again", "passed fit", "cleared to play",
       "debut", "first goal", "first appearance",
       "career", "future plans", "future unclear",
       "transfer target", "on the radar", "being monitored",
-      "squad", "first team", "dropped to bench", "dropped from squad",
+      "first team", "dropped to bench", "dropped from squad",   # bare "squad"
       "called up", "international call-up", "recalled",
       "rested", "given time off",
       "training ground", "in training", "returns to training",
@@ -564,23 +542,66 @@ _BREAKING_SIGNALS: list[tuple[list[str], int]] = [
       "must see", "watch this"], 15),
 
     # ── RUMOUR / SPECULATION — PENALTY (~35 phrases) ───────────────────────────
+    # -120, not -15. Gossip is the lowest-value thing this page can post, but
+    # any club story collects an ambient 90 for free (major team 20 + competition
+    # 20 + squad player 10 + transfer wording 40) plus 40 per famous name, so a
+    # penalty smaller than that cannot pull a rumour under the 50 threshold.
+    # -120 sinks "close to signing" and the daily gossip column to 0 while a
+    # story with real reporting behind it still clears 50.
     (["could join", "could move", "could leave", "could sign",
       "might join", "might sign", "might leave", "might move",
       "rumour", "rumoured", "rumored", "reportedly",
       "according to reports", "reports suggest", "reports claim",
       "linked with", "linked to", "being linked",
-      "interest in", "interested in", "showing interest",
-      "eyeing", "eyeing up", "considering",
-      "in talks", "in discussions", "in negotiations",
+      "eyeing", "eyeing up",
       "bid rejected", "bid turned down", "offer rejected",
       "set to join", "set to sign", "set to move",
-      "close to", "nearing", "approaching",
       "could be heading", "may leave", "may join",
-      "expected to", "tipped to", "likely to"], -15),
+      "tipped to",
+      "gossip", "transfer gossip"], -120),
+
+    # ── HEDGED REPORTING — MILD PENALTY ───────────────────────────────────────
+    # These four read as gossip in a transfer headline but are ordinary English
+    # in real reporting: "ruled out ... expected to miss the World Cup" is a
+    # confirmed injury, "confirm interest in X has ended" is a completed deal.
+    # At -120 they zeroed both. -30 still ranks a hedge below a plain statement.
+    (["interest in", "interested in", "showing interest",
+      "in talks", "in discussions", "in negotiations",
+      "close to", "nearing", "approaching",
+      "expected to", "likely to", "considering"], -30),
 ]
 
 # Regex to detect a scoreline anywhere in the text, e.g. "2-1", "3–0"
 _SCORELINE_RE = re.compile(r'\b\d{1,2}[-–]\d{1,2}\b')
+
+from functools import lru_cache
+
+_WORD_EDGE = re.compile(r"\w").match
+
+
+def _phrase_re(phrases) -> re.Pattern:
+    r"""Compile one bucket of phrases into a single alternation.
+
+    Bare `in` matched inside words: "son" scored Son Heung-min on "season",
+    "win" on "winger", "lose" on "close", "final" on "finally". \b is added
+    only where the phrase edge is a word char — "£50m", "ft:" and "champions!"
+    have non-word edges and \bft:\b can never match anything.
+    Longest phrase first so "cristiano ronaldo" wins over "ronaldo" and the
+    pair counts as one name instead of two.
+    """
+    body = "|".join(
+        (r"\b" if _WORD_EDGE(p) else "") + re.escape(p)
+        + (r"\b" if _WORD_EDGE(p[-1]) else "")
+        for p in sorted({p for p in phrases if p}, key=len, reverse=True)
+    )
+    # An empty bucket (the squad cache when its refresh failed) must match
+    # nothing — an empty pattern matches at every position instead.
+    return re.compile(body or r"(?!)")
+
+
+_SIGNAL_RES: list[tuple[re.Pattern, int]] = [
+    (_phrase_re(phrases), points) for phrases, points in _BREAKING_SIGNALS
+]
 
 def _known_players() -> list[str]:
     """
@@ -595,7 +616,7 @@ def _known_players() -> list[str]:
         return []
 
 # ── Hall of Fame: historically famous / globally recognised players ────────────
-# Mentioning ANY of these gives +20 per name (stacks with the dynamic cache +10).
+# First name mentioned is worth +40, each extra one half the last (max +80).
 # Covers all-time greats, 2000s–2020s legends, and current world-class superstars.
 _HALL_OF_FAME: frozenset[str] = frozenset({
     # ── All-time greats ────────────────────────────────────────────────────────
@@ -747,63 +768,144 @@ _HALL_OF_FAME: frozenset[str] = frozenset({
 })
 
 # Milestone / feature story signals — highly shareable even without a match result
+# Flat +15 for ANY hit, so every phrase has to be genuinely rare. "more than",
+# "record", "history", "first time", "stunning", "shock", "in a row" are not —
+# they are ordinary English and were handing the bonus to filler. What is left
+# only appears when a story really is about a record or a first.
 _MILESTONE_PHRASES: list[str] = [
-    "oldest", "youngest", "first ever", "first time", "first time since",
-    "history", "historic", "makes history", "creates history",
-    "record", "record-breaking", "new record", "all-time record",
+    "oldest", "youngest", "first ever", "first time since",
+    "makes history", "creates history",
+    "record-breaking", "new record", "all-time record",
+    "breaks the record", "extends record", "surpasses", "overtakes",
     "most goals", "most assists", "most appearances", "most caps",
-    "most expensive", "richest", "highest paid",
     "never before", "only player", "only team", "only manager",
-    "rare", "unique achievement", "incredible", "unbelievable",
-    "legendary", "greatest", "best ever", "worst ever",
-    "milestone", "century", "100th", "200th", "50th",
-    "hat-trick of", "four goals", "five goals",
-    "player of the tournament", "best player", "golden boot",
-    "ballon d'or", "best in the world", "world class",
-    "older than", "younger than", "more than", "fewer than",
-    "surpasses", "overtakes", "breaks the record", "extends record",
-    "unbeaten", "unbeaten run", "winning streak", "losing streak",
-    "consecutive", "in a row", "back-to-back",
-    "comeback", "miracle", "shock", "stunning", "sensational",
-    "thriller", "dramatic", "last-gasp", "against all odds",
-    "underdog", "giant killing", "upset", "surprise",
-    "world cup star", "tournament top scorer", "tournament best",
+    "milestone", "100th", "200th", "50th", "hat-trick of",
+    "winning streak", "losing streak", "unbeaten run",
+    "giant killing", "against all odds",
+    "player of the tournament", "tournament top scorer",
 ]
+
+
+_HOF_RE = _phrase_re(_HALL_OF_FAME)
+_MILESTONE_RE = _phrase_re(_MILESTONE_PHRASES)
+
+
+# The squad cache refreshes weekly, so this one can only be built at call time.
+@lru_cache(maxsize=1)
+def _players_re(tokens: tuple[str, ...]) -> re.Pattern:
+    return _phrase_re(tokens)
+
+
+def _name_points(hits: set[str], first: int) -> int:
+    """Points for a set of matched name aliases, replacing `len(hits) * first`.
+
+    Dedupe first: _HALL_OF_FAME lists both "ronaldo" and "cristiano ronaldo",
+    so one player scored twice — 5 of the 6 name-matching stories on a live BBC
+    pull hit this. Then halve every extra person, which caps the whole term at
+    2 * first no matter how many names a listicle crams in.
+
+    ponytail: "alias contained in a longer alias" is the entire dedup. It misses
+    unrelated aliases for one player ("cr7" vs "ronaldo"); canonical ids are the
+    upgrade, worth it only when double-counted CR7 headlines actually turn up.
+    """
+    # Token boundary, not bare containment: "son" is a substring of "alisson"
+    # but Son and Alisson are two players. "ronaldo" ⊂ "cristiano ronaldo" is a
+    # real alias because it sits on a word edge.
+    people = hits - {a for a in hits for b in hits
+                     if a != b and (b.startswith(a + " ") or b.endswith(" " + a)
+                                    or " " + a + " " in b)}
+    return int(2 * first * (1 - 0.5 ** len(people)))
+
+
+# Off on the hot path (60s poll, 200 stories): each term costs one `is not None`
+# and nothing else. explain_story() switches it on for one call.
+_TRACE: list | None = None
 
 
 def score_story(title: str, description: str = "") -> int:
     """
-    Return an uncapped significance score for the story (minimum 0).
-    Higher = more breaking / important. No upper limit, so the most
-    keyword-rich stories rank distinctly above one-signal stories instead
-    of all tying at a 100 ceiling.
+    Return a significance score for the story (minimum 0).
+    Higher = more breaking / important. Buckets still stack without a global
+    ceiling, but every individual term is bounded, so no one signal type can
+    carry a story alone. That was the real cost of dropping the old 100 cap:
+    a season-review listicle naming twelve stars scored 700 while
+    "Arsenal beat Chelsea 2-1" scored 210.
     """
-    text = (title + " " + description).lower()
+    # The page posts a card whose headline is the title, so title signal is what
+    # actually matters. BBC standfirsts are real prose (median 128 chars, only
+    # ~21% word overlap with the title), so they do carry independent signal —
+    # but it is body-copy signal: one passing "World Cup" in a history feature
+    # bought +240 and outranked every real result on the feed. Score the two
+    # separately and discount the description. Anything in 0.25–0.5 gives the
+    # same ordering on live data, so //3 — no float, no cast, always an int.
+    # ponytail: recursion, not a helper — keeps the single scoring body that the
+    # regex and caps patches also edit, so this stays a 3-line diff.
+    if description:
+        return score_story(title) + score_story(description) // 3
+
+    text = title.lower()
     score = 0
 
-    for phrases, points in _BREAKING_SIGNALS:
-        if any(p in text for p in phrases):
+    for rx, points in _SIGNAL_RES:
+        m = rx.search(text)
+        if m:
             score += points
+            if _TRACE is not None: _TRACE.append((points, m.group(), "signal"))
 
     # Scoreline bonus
     if _SCORELINE_RE.search(text):
         score += 15
+        if _TRACE is not None: _TRACE.append((15, "", "scoreline"))
 
-    # Hall-of-Fame superstars: +40 each — any mention instantly pushes the story high
-    hof_hits = sum(1 for name in _HALL_OF_FAME if name in text)
-    if hof_hits >= 1:
-        score += hof_hits * 40
+    # Hall-of-Fame superstars: first name +40, each extra one half the last
+    hof = set(_HOF_RE.findall(text))
+    score += _name_points(hof, 40)
+    if _TRACE is not None and hof: _TRACE.append((_name_points(hof, 40), ", ".join(sorted(hof)), "hall-of-fame"))
 
-    # Dynamic squad cache: +10 per current squad player mentioned
-    player_hits = sum(1 for p in _known_players() if p in text)
-    if player_hits >= 1:
-        score += player_hits * 10
+    # Dynamic squad cache: first +10, tapering the same way
+    squad = set(_players_re(tuple(_known_players())).findall(text))
+    score += _name_points(squad, 10)
+    if _TRACE is not None and squad: _TRACE.append((_name_points(squad, 10), ", ".join(sorted(squad)), "squad-cache"))
 
     # Milestone / highly-shareable feature story bonus
-    if any(p in text for p in _MILESTONE_PHRASES):
+    if _MILESTONE_RE.search(text):
         score += 15
+        if _TRACE is not None: _TRACE.append((15, _MILESTONE_RE.search(text).group(), "milestone"))
 
     return max(0, score)
+
+
+def explain_story(title: str, description: str = "") -> list[tuple[int, str, str, str]]:
+    """(points, matched phrase, term, "title"|"desc") for everything score_story counted.
+
+    Not a second scorer — it runs score_story itself with the trace sink on, so
+    a bucket's points changing shows up here for free. Description rows carry
+    their pre-//3 points; the //3 lands on the sum, so callers should show the
+    discounted total as score_story(title, desc) - score_story(title).
+
+    ponytail: one module global, no lock — this is a single-threaded CLI. If the
+    poll ever goes concurrent, make _TRACE a contextvar.
+    """
+    global _TRACE
+    rows = []
+    for source, text in (("title", title), ("desc", description)):
+        if not text:
+            continue
+        _TRACE = []
+        try:
+            score_story(text)
+        finally:
+            hits, _TRACE = _TRACE, None
+        rows += [(p, ph, _bucket_label(ph) if t == "signal" else t, source)
+                 for p, ph, t in hits]
+    return rows
+
+
+def _bucket_label(phrase: str) -> str:
+    """Buckets are bare tuples with only comment headers, so name each one after
+    its own first phrase — enough for a tuner to grep _BREAKING_SIGNALS and land
+    on the right one. Preview-only, so the linear scan is free."""
+    return next((p[0] for p, _ in _BREAKING_SIGNALS if phrase in p), "signal")
 
 # Single source by choice: BBC Sport football. Every entry is reliably dated,
 # football-only, never paywalled, and carries a high-res editorial image we can
@@ -949,6 +1051,12 @@ _STOP_WORDS = {
 }
 
 
+_CATEGORY_RES = [(c, _phrase_re(kws)) for c, kws in CATEGORY_KEYWORDS.items()]
+_PLAYER_RES = [(_phrase_re([k]), q) for k, q in PLAYER_SEARCHES.items()]
+_TEAM_RES = [(_phrase_re([k]), q) for k, q in TEAM_SEARCHES.items()]
+_HINT_RES = [(_phrase_re(kws), q) for kws, q in STORY_TYPE_HINTS]
+
+
 def extract_pexels_queries(title: str, description: str = "") -> list[str]:
     """
     Build 2-3 story-specific Pexels search queries ranked from most to least specific.
@@ -958,22 +1066,22 @@ def extract_pexels_queries(title: str, description: str = "") -> list[str]:
     queries: list[str] = []
 
     # 1. Player names — most specific
-    for player_key, player_query in PLAYER_SEARCHES.items():
-        if player_key in text:
+    for rx, player_query in _PLAYER_RES:
+        if rx.search(text):
             queries.append(player_query)
             break
 
     # 2. Team names
-    for team_key, team_query in TEAM_SEARCHES.items():
-        if team_key in text:
+    for rx, team_query in _TEAM_RES:
+        if rx.search(text):
             if team_query not in queries:
                 queries.append(team_query)
             if len(queries) >= 2:
                 break
 
     # 3. Story type (action context)
-    for keywords, action_query in STORY_TYPE_HINTS:
-        if any(kw in text for kw in keywords):
+    for rx, action_query in _HINT_RES:
+        if rx.search(text):
             if action_query not in queries:
                 queries.append(action_query)
             break
@@ -1057,10 +1165,56 @@ def _is_football(title: str, description: str = "") -> bool:
     return not _NOT_FOOTBALL_RE.search((title + " " + description).lower())
 
 
+# Non-postable FORMATS. A quiz, a TV listing, a live blog or a video stub has
+# no standalone image card in it, yet scores well: "how to watch" and "live on"
+# are +20 preview signals and "as it happened" is a +150 result signal, so a BBC
+# TV promo scored 230 and a live blog 170 against a threshold of 50.
+#
+# TITLE ONLY, deliberately. BBC opens the *summary* of ordinary match reports
+# with "Watch highlights as ...", so reading the description dropped two real
+# results in a single live feed ("Chelsea lose friendly as Juventus score
+# stunning winner", "Nygren header earns Celtic opening victory").
+#
+# Word boundaries only, same lesson as the reject list above: bare "live" kills
+# "Live wire Saka", bare "watch" kills "Watch out for Haaland", bare "video"
+# kills "video review", bare "vote" kills "vote of confidence", bare
+# "highlights" kills "Liverpool highlights their defensive frailty". Every
+# ambiguous word is anchored to a colon, a following word, or the title start.
+#
+# Narrowed after a false-positive audit: bare "vote for" killed governance votes
+# ("Fifa members vote for Infantino"), bare "podcast"/"on tv" killed stories
+# ABOUT podcasts and punditry, bare "sign up" killed "Arsenal sign up to
+# charter", bare "quiz" killed "Police quiz player", bare "gossip" killed
+# "Klopp dismisses transfer gossip". A hard delete has to be sure.
+_NOT_POSTABLE_RE = re.compile(
+    # Title-initial "Watch ..." is always a video stub; "Watch out ..." is news.
+    r"^watch (?!out\b)"
+    # Colon-labelled media items: "Watch:", "Video:", "Listen:", "Highlights:".
+    r"|\b(watch|video|listen|highlights|gallery|pictures|photos)\s*:"
+    # "Live:" / "Highlights -" were the two junk shapes that walked through.
+    r"|^(live|highlights)\s*[:\-–]"
+    r"|\b("
+    r"quiz (of|answers)|how well do you know|test yourself|who am i|guess the|"
+    r"how to watch|where to watch|how to follow|what channel|tv schedule|tv guide|"
+    r"live on (bbc|sky|itv|tnt|amazon|prime|dazn)|"
+    r"live (text|blog|updates?|coverage)|as it happened|minute-by-minute|"
+    r"(subscribe|sign up) (for|to) (our|the|bbc)|newsletter|"
+    r"(transfer|football|saturday's|sunday's|monday's) gossip|gossip column|rumour mill|"
+    r"transfer round-?up|"
+    r"betting (tips|odds|preview)|bet builder|best bets|accumulator|"
+    r"have your say|vote (now|in our)|pick your"
+    r")\b"
+)
+
+
+def _is_postable(title: str) -> bool:
+    return not _NOT_POSTABLE_RE.search(title.lower())
+
+
 def _categorize(title: str, description: str) -> str:
     text = (title + " " + description).lower()
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        if any(kw in text for kw in keywords):
+    for category, rx in _CATEGORY_RES:
+        if rx.search(text):
             return category
     return "Football News"
 
@@ -1080,8 +1234,10 @@ def _extract_rss_image(entry: dict) -> str:
     if thumbs:
         url = thumbs[0].get("url", "")
         if url:
-            # Upgrade BBC CDN resolution: /240/ → /976/
-            url = re.sub(r'/\d{2,4}/', '/976/', url)
+            # Only the FIRST 2-4 digit segment is the size — the next one is
+            # the CPS asset bucket, and rewriting it 404s 16% of the feed.
+            # 1536 not 976: the photo box is 1080x760, so 976 came out upscaled.
+            url = re.sub(r'/\d{2,4}/', '/1536/', url, count=1)
             return url
 
     # Guardian / ESPN — media_content; pick highest resolution
@@ -1120,6 +1276,21 @@ def _extract_rss_image(entry: dict) -> str:
     return ""
 
 
+# Longest alias first so "real sociedad" is never read as "real madrid" and
+# "manchester city" never degrades to a bare "manchester".
+_TEAM_RE = re.compile(
+    r'\b(' + '|'.join(sorted(map(re.escape, _MAJOR_TEAMS), key=len, reverse=True)) + r')\b')
+
+
+def _event_key(t: str) -> tuple[frozenset, frozenset]:
+    """(teams named, scorelines) — the cheap identity of one football event."""
+    low = t.lower()
+    # Scores sorted: "Arsenal 2-1 Chelsea" and "Chelsea 1-2 Arsenal" are one game.
+    return (frozenset(_TEAM_RE.findall(low)),
+            frozenset(tuple(sorted(map(int, re.split(r'[-–]', s))))
+                      for s in _SCORELINE_RE.findall(low)))
+
+
 def same_event(a: str, b: str) -> bool:
     """True if two headlines from different outlets cover the same story.
 
@@ -1134,6 +1305,24 @@ def same_event(a: str, b: str) -> bool:
     ta, tb = tokens(a), tokens(b)
     if not ta or not tb:
         return False
+    # Word overlap alone cannot tell "beat Chelsea 2-1" from "beat Chelsea 3-0",
+    # so decide on the event key first and only fall back to overlap.
+    (team_a, score_a), (team_b, score_b) = _event_key(a), _event_key(b)
+    if score_a and score_b and score_a.isdisjoint(score_b):
+        return False                       # two different games
+    # The team key alone is not an event: "Arsenal beat Chelsea" and "Arsenal
+    # charged by FA over Chelsea tunnel clash" name the same two clubs and are
+    # different stories. Since a collapse here deletes a story permanently,
+    # require the wording to agree too — or both sides to carry the same score.
+    overlap = len(ta & tb) / min(len(ta), len(tb))
+    if team_a == team_b and team_a and (
+            (len(team_a) > 1 and overlap >= 0.5) or (score_a and score_b)):
+        return True                        # same cast, no contradicting score
+    if (team_a - team_b) and (team_b - team_a):
+        return False                       # each names a club the other doesn't
+    if len(ta - tb) == 1 and len(tb - ta) == 1:
+        return False                       # one swapped word each: sign a striker
+                                           # vs sign a goalkeeper is two transfers
     # Jaccard over the smaller headline: tolerates one outlet being wordier.
     return len(ta & tb) / min(len(ta), len(tb)) >= 0.5
 
@@ -1176,6 +1365,9 @@ def fetch_news(max_stories: int = 20) -> list[dict]:
             ).strip()
 
             if not _is_football(title, description):
+                continue
+
+            if not _is_postable(title):
                 continue
 
             category = _categorize(title, description)
@@ -1234,6 +1426,172 @@ def _demo() -> None:
     assert not same_event("Spain beat Portugal in final",
                           "Liverpool preparing opening bid for Barcola")
     assert not same_event("", "anything")
+    # reversed subject order and a different verb still describe one event
+    assert same_event("Arsenal 2-1 Chelsea", "Chelsea lose to Arsenal in thriller")
+    assert same_event("Arsenal 2-1 Chelsea", "Chelsea 1-2 Arsenal")
+    assert same_event("Spain beat Portugal in final", "Portugal beaten by Spain to lose final")
+    # Deliberately NOT collapsed any more: one scoreline plus one shared club
+    # also matched "Everton 3-0 Wigan" / "Everton sack their manager", and a
+    # wrong collapse is permanent (mark_posted) while a miss costs one post.
+    assert not same_event("Man City 3-0 Everton", "Haaland hat-trick sinks Everton")
+    # ("Everton 3-0 Wigan" / "Everton sack their manager" still collapses, on the
+    #  pre-existing 0.5 Jaccard fallback — not the team key. Raising that
+    #  threshold also breaks "Liverpool sign Isak"/"Isak completes move", which
+    #  sits at exactly 0.50, so it is left alone deliberately.)
+    assert not same_event("Arsenal beat Chelsea in the Premier League",
+                          "Arsenal charged by FA over Chelsea tunnel clash")
+    assert same_event("Liverpool sign Isak for \u00a3120m", "Isak completes Liverpool move")
+    # a different scoreline, opponent or object is a different event
+    assert not same_event("Arsenal beat Chelsea 2-1", "Arsenal beat Chelsea 3-0")
+    assert not same_event("Arsenal beat Chelsea", "Arsenal beat Tottenham")
+    assert not same_event("Man Utd sign a striker", "Man Utd sign a goalkeeper")
+    assert not same_event("Liverpool win the league", "Liverpool win the cup")
+    # longest alias first: "Real Sociedad" is its own club, not "Real Madrid"
+    assert _event_key("Real Madrid beat Real Sociedad")[0] == {"real madrid", "real sociedad"}
+    assert same_event("Real Madrid beat Real Sociedad", "Real Sociedad lose to Real Madrid")
+    assert not same_event("Inter Milan beat Napoli", "AC Milan beat Napoli")
+
+    # keyword matching is on word boundaries: bare `in` scored "son" inside
+    # "season", "win" inside "winger", "lose" inside "close"
+    assert not _phrase_re(["son"]).search("a long season at anfield")
+    assert not _phrase_re(["win"]).search("the new winger arrives")
+    assert not _phrase_re(["down"]).search("memories of lockdown")
+    assert not _phrase_re(["final"]).search("he finally scored")
+    assert not _phrase_re(["lose", "ft "]).search("close to a deal, he left")
+    assert _phrase_re(["son"]).search("son heung-min scores")
+    assert _phrase_re(["win"]).search("spurs win late")
+    assert not _phrase_re([]).search("anything")   # empty bucket matches nothing
+
+    # phrases with non-word edges must not get a \b they can never satisfy
+    for _p, _s in [("ft:", "ft: arsenal 2-1 chelsea"), ("\u00a350m", "a \u00a350m deal"),
+                   ("\u20ac100m", "a \u20ac100m bid"), ("eto'o", "samuel eto'o scored"),
+                   ("st. pauli", "st. pauli stun bayern"), ("nil-nil", "a dull nil-nil"),
+                   ("champions!", "liverpool are champions!"),
+                   ("u21 championship", "england win the u21 championship"),
+                   ("spot-kicks", "decided on spot-kicks"),
+                   ("back-to-back", "back-to-back titles"),
+                   ("$100m", "a $100m package"), ("ko:", "ko: 20:00 bst"),
+                   ("h2h", "the h2h record"), ("3-0", "united win 3-0")]:
+        assert _phrase_re([_p]).search(_s), _p
+    assert not _phrase_re(["3-0"]).search("a 13-0 rout")
+    assert not _phrase_re(["ko:"]).search("tko: not football")
+
+    # "ronaldo" and "cristiano ronaldo" are both listed - one man, one hit
+    assert len(set(_HOF_RE.findall("cristiano ronaldo scores again"))) == 1
+    assert len(set(_HOF_RE.findall("messi and ronaldo meet again"))) == 2
+
+    # end to end: "season" picked a Son Heung-min photo, "feels" read as a
+    # transfer "fee", "wonder goal" as a "won"
+    assert "Son Heung-min Tottenham football" not in extract_pexels_queries(
+        "Klopp reflects on a long season at Anfield")
+    assert _categorize("Guardiola feels the pressure", "") == "Football News"
+    assert extract_pexels_queries("A wonder goal from 30 yards")[0] == \
+        "football goal celebration player"
+
+    # score aggregation: one player named two ways is one hit, and keyword
+    # density must not out-rank a terse real result (both were live bugs)
+    assert _name_points(set(), 40) == 0
+    assert _name_points({"ronaldo"}, 40) == 40
+    assert _name_points({"ronaldo", "cristiano ronaldo"}, 40) == 40  # one man
+    assert _name_points({"messi", "haaland"}, 40) == 60              # two men
+    assert _name_points({str(i) for i in range(12)}, 40) < 80          # capped
+    assert isinstance(score_story("Arsenal beat Chelsea 2-1"), int)
+    assert score_story("") == 0
+    assert score_story("Arsenal beat Chelsea 2-1") > score_story(
+        "Ranked: the 20 best players - Messi, Ronaldo, Mbappe, Haaland, "
+        "Bellingham, Salah, Kane, Modric, Neymar, Lewandowski, Benzema, Zidane")
+
+    # Title signal beats the identical signal buried in a description: the card
+    # is built from the headline, so that is what the score has to track.
+    assert (score_story("Liverpool beat Arsenal 2-1", "")
+            > score_story("A quiet day at the training ground",
+                          "Liverpool beat Arsenal 2-1"))
+    # ...but the description is discounted, not discarded.
+    assert (score_story("A quiet day at the training ground",
+                        "Liverpool beat Arsenal 2-1")
+            > score_story("A quiet day at the training ground"))
+    # The default is a no-op fast path.
+    assert (score_story("Arsenal sign Guimaraes from Newcastle in \u00a375m deal")
+            == score_story("Arsenal sign Guimaraes from Newcastle in \u00a375m deal", ""))
+    assert isinstance(score_story("Chelsea beat Juventus", "Full time."), int)
+
+    # explain_story must add up to what score_story returned, or --preview lies.
+    _t, _d = "Liverpool beat Arsenal 2-1", "Messi scores a hat-trick of goals"
+    assert sum(p for p, _, _, s in explain_story(_t, _d) if s == "title") \
+        == score_story(_t)
+    assert sum(p for p, _, _, s in explain_story(_t, _d) if s == "desc") \
+        == score_story(_d)
+    # buckets are labelled by their own first phrase, not by what matched
+    assert {t for _, _, t, _ in explain_story(_t, _d)} >= {"beats", "scoreline",
+                                                           "hall-of-fame"}
+    assert explain_story("") == []
+    assert _TRACE is None                     # sink never left on for the poll
+
+    # non-postable formats: no standalone image card exists in these
+    assert not _is_postable("How to watch: Liverpool v Spurs on TV")
+    assert not _is_postable("Quiz: how well do you know the Premier League?")
+    assert not _is_postable("Who am I? Guess Premier League star No 20")
+    assert not _is_postable("Arsenal v Chelsea - as it happened")
+    assert not _is_postable("Premier League live updates: Saturday's games")
+    assert not _is_postable("Barca make second bid for Rodri - Sunday's gossip")
+    assert not _is_postable("Watch: Haaland's hat-trick against Wolves")
+    assert not _is_postable("Watch Guimaraes' best moments after Arsenal sign him")
+    assert not _is_postable("Highlights: Arsenal 3-0 Leeds United")
+    assert not _is_postable("Betting tips: best odds for Saturday's games")
+    assert not _is_postable("Have your say: who was the player of the month?")
+    assert not _is_postable("Subscribe to the Match of the Day podcast")
+    # word-boundary traps - each of these killed real news when tried as substrings
+    assert _is_postable("Live wire Saka fires Arsenal to victory")
+    assert _is_postable("Watch out for Haaland, warns Guardiola")
+    assert _is_postable("Real Madrid's video review controversy")
+    assert _is_postable("Vote of confidence for under-fire boss")
+    assert _is_postable("Liverpool highlights their defensive frailty")
+    assert _is_postable("Arsenal sign up-and-coming striker from Reims")
+    assert _is_postable("Guardiola quizzed on Haaland future")
+    assert _is_postable("A youngster to watch at each Premier League club")
+    # match_fetcher's synthetic cards must survive
+    assert _is_postable("Arsenal 3-0 Leeds United")
+    assert _is_postable("Arsenal vs Leeds United")
+
+    # BBC ichef urls carry TWO 2-4 digit segments - the size and the CPS asset
+    # bucket. A greedy sub rewrote both and 404'd 10 of 63 live entries.
+    two = {"media_thumbnail": [{"url":
+        "https://ichef.bbci.co.uk/ace/standard/240/cpsprodpb/7161/live/b7e91bd0.jpg"}]}
+    assert _extract_rss_image(two) == (
+        "https://ichef.bbci.co.uk/ace/standard/1536/cpsprodpb/7161/live/b7e91bd0.jpg")
+    one = {"media_thumbnail": [{"url":
+        "https://ichef.bbci.co.uk/ace/standard/240/cpsprodpb/de50/live/00229450.jpg"}]}
+    assert _extract_rss_image(one) == (
+        "https://ichef.bbci.co.uk/ace/standard/1536/cpsprodpb/de50/live/00229450.jpg")
+    # An imageless story is not an error - match_fetcher emits article_image=""
+    # for every fixture and result card, and image_fetcher has six more rungs.
+    assert _extract_rss_image({}) == ""
+
+    # post filter: real news outranks filler
+    _T = 50   # BREAKING_THRESHOLD default, see main.py:_threshold
+    assert score_story("Real Madrid thrash Barcelona 4-0 in El Clasico") > 100
+    assert score_story("Nygren header earns Celtic opening victory against Dundee") > _T
+    assert score_story("Argentina beat France on penalties to win the World Cup final") > 200
+    assert score_story("Birmingham sign striker Effa Effa from Le Havre") > _T
+    assert score_story("Man City agree deal to sign Marseille keeper Rulli") > _T
+    # transfer speculation is the lowest-value content type and must not post
+    assert score_story("Barca make second bid for Rodri - Sunday's gossip") < _T
+    assert score_story("Chelsea reportedly eyeing a move for Osimhen") < _T
+    assert score_story("Liverpool linked with a move for Araujo, reports suggest") < _T
+    assert (score_story("Nygren header earns Celtic opening victory against Dundee")
+            > score_story("Barca make second bid for Rodri - Sunday's gossip"))
+    # quizzes, explainers and fixture-list pieces are not breaking news
+    assert score_story("What is the World Cup prize money?") < _T          # was 370
+    assert score_story("When is the EFL Cup second-round draw?") < _T      # "draw" was +175
+    assert score_story("Who will exit Chelsea? How Blues could cut 41-man squad") < _T
+    assert score_story("How to follow the new football season on BBC Sport") < _T
+    assert score_story("What are the key dates for the 2026-27 football season?") < _T
+    # structural: one result bucket, and the generic phrases stay deleted
+    assert sum(1 for phrases, _ in _BREAKING_SIGNALS if "beat" in phrases) == 1
+    assert sum(1 for phrases, _ in _BREAKING_SIGNALS if "victory" in phrases) == 1
+    for _p in ("win", "draw", "exit", "down", "goal", "final", "says", "claims",
+               "book", "held", "lost", "son", "gabriel", "kane", "rice", "diaz"):
+        assert not any(_p in phrases for phrases, _ in _BREAKING_SIGNALS), _p
     print("OK")
 
 

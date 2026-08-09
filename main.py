@@ -11,6 +11,7 @@ Usage:
   python main.py --dry-run        # fetch + score + create image; skip the upload
   python main.py --preview        # show top 15 stories with scores; posts nothing
   python main.py --preview 30     # same but show top 30
+  python main.py --preview --why  # also show which terms made each score
 """
 
 import os
@@ -23,7 +24,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.news_fetcher      import fetch_news, same_event
+from src.news_fetcher      import (explain_story, fetch_news, same_event,
+                                   score_story)
 from src.match_fetcher     import fetch_matches
 from src.content_formatter import format_caption, format_image_brief
 from src.image_creator     import create_post_image, save_image
@@ -31,7 +33,8 @@ from src.webhook_poster    import post_via_webhook
 from src.graph_poster      import post_reel
 from src.reel_creator      import create_reel
 from src.story_tracker     import (behind_pace, is_posted, mark_posted,
-                                   mark_reel, posts_today, reels_today)
+                                   mark_reel, posts_today, reels_today,
+                                   relaxed_threshold)
 
 
 def _threshold() -> int:
@@ -137,6 +140,14 @@ def _publish_reel(caption: str, image) -> bool:
     return True
 
 
+def _publication_order(stories: list[dict]) -> list[dict]:
+    """Newest first, to the nearest 5 minutes. Feeds timestamp to the second,
+    so without the bucket a filler item that beat a major story into the window
+    by 30s leads the run. Anything genuinely fresher still goes first — news
+    must never queue behind a stale high scorer."""
+    return sorted(stories, key=lambda s: (int(s["age_hours"] * 60) // 5, -s["score"]))
+
+
 def run(dry_run: bool = False) -> int:
     validate_config(dry_run)
 
@@ -153,13 +164,13 @@ def run(dry_run: bool = False) -> int:
         print("    No stories found. Will retry next run.")
         return 0
 
-    # Newest first, strictly. Score decides *whether* a story is worth posting
-    # (the threshold below); publication time decides the order. The daemon
-    # re-polls every POLL_SECONDS, so a story that lands in the feed goes out
-    # on the next poll — within the minute — rather than queueing behind a
-    # higher-scoring item that has been sitting in the window for two hours.
+    # Best first — but this order only decides what SURVIVES the [:20] and
+    # budget cuts below, never what goes out first. Publication order is put
+    # back to newest-first at `to_post`, so a story that has been sitting in
+    # the window for two hours still cannot queue ahead of one that just
+    # landed; it is simply no longer the story we keep when something must go.
     new_stories = [s for s in stories if not is_posted(s["id"])]
-    new_stories.sort(key=lambda s: s["age_hours"])
+    new_stories.sort(key=lambda s: -s["score"])
 
     print(f"    Found {len(stories)} stories, {len(new_stories)} new.\n")
 
@@ -180,12 +191,13 @@ def run(dry_run: bool = False) -> int:
         return 0
     print(f"    Daily budget: {budget} of {max_per_day} posts remaining.")
 
-    # Keyword score is the only filter. If we're behind the pace needed to hit
-    # the daily minimum, drop the threshold and take the best available story.
-    threshold = breaking_threshold
-    if behind_pace(min_per_day):
-        threshold = 0
-        print(f"    Behind pace for {min_per_day} posts/day — threshold relaxed.")
+    # Keyword score is the only filter. Behind the daily minimum we lower the
+    # bar in proportion to the shortfall — never to zero, which published the
+    # feed's lock-screen promos and quiz pages under our own brand.
+    threshold = relaxed_threshold(breaking_threshold, behind_pace(min_per_day))
+    if threshold < breaking_threshold:
+        print(f"    Behind pace for {min_per_day} posts/day — "
+              f"threshold {breaking_threshold} → {threshold}.")
 
     shortlist = [s for s in new_stories if s["score"] >= threshold][:20]
 
@@ -202,10 +214,9 @@ def run(dry_run: bool = False) -> int:
         print(f"    Collapsed {len(shortlist) - len(deduped)} duplicate retelling(s).")
     shortlist = deduped
 
-    # Everything that qualifies goes out this run, not one per poll. Two
-    # stories landing in the same minute both get queued here; the daily
-    # budget is the only thing that trims the tail.
-    to_post = shortlist[:budget]
+    # Everything that survived the cuts goes out this run, not one per poll,
+    # and in publication order — newest first (see _publication_order).
+    to_post = _publication_order(shortlist[:budget])
     print(f"    Queued {len(to_post)} story(s) to post.\n")
 
     posted_count = 0
@@ -265,7 +276,29 @@ def daemon() -> None:
     print("👋  Runtime limit reached — exiting so the next job takes over.")
 
 
-def preview(count: int = 15) -> None:
+def _why(story: dict) -> None:
+    """Print which terms produced this story's score, title and description apart.
+
+    ponytail: opt-in behind --why instead of always on. The breakdown is 1-6
+    extra lines per story, which buries the ranked list it is meant to explain.
+    """
+    title, desc = story["title"], story.get("description", "")
+    title_score = score_story(title)
+    # The description's //3 lands on its sum, not per term, so take the discount
+    # straight from score_story rather than restating the divisor here.
+    desc_score  = score_story(title, desc) - title_score
+
+    rows = explain_story(title, desc)
+    for source, header in (("title", f"title {title_score:>4}"),
+                           ("desc",  f"desc  {desc_score:>+4} (//3 of "
+                                     f"{sum(p for p, _, _, s in rows if s == 'desc')})")):
+        terms = [f"{t} {p:+}" + (f" “{ph}”" if ph and ph != t else "")
+                 for p, ph, t, s in rows if s == source]
+        if terms:
+            print(f"       {header}  =  " + ",  ".join(terms))
+
+
+def preview(count: int = 15, why: bool = False) -> None:
     """Show upcoming stories ranked by score. No images created, nothing posted."""
     breaking_threshold = _threshold()
 
@@ -299,6 +332,8 @@ def preview(count: int = 15) -> None:
         print(f"  #{i:>2}  [{score_bar}] {story['score']:>4}  {label}")
         print(f"       {story['title']}")
         print(f"       {story['category']}  ·  {story['source']}")
+        if why:
+            _why(story)
         print()
 
     would_post = sum(1 for s in new_stories if s["score"] >= breaking_threshold)
@@ -320,6 +355,6 @@ if __name__ == "__main__":
             count = int(sys.argv[idx + 1])
         except (IndexError, ValueError):
             count = 15
-        preview(count)
+        preview(count, why="--why" in sys.argv)
     else:
         run(dry_run=dry)
