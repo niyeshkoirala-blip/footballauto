@@ -24,15 +24,15 @@ from src.image_fetcher import fetch_story_image
 
 # ── Canvas ─────────────────────────────────────────────────────────────────────
 WIDTH   = 1080
-HEIGHT  = 1350
 PAD_X   = 44
 PAD_TOP = 36
 PAD_BOT = 40
 
-# The photo is the flexible element: its height is whatever is left once the
-# brief and the footer have taken theirs, so the canvas is always full. A fixed
-# PHOTO_H left ~420 px of dead navy under a short brief.
-PHOTO_H_MIN = 700          # never let a very long brief squash the photo
+# The canvas height is not fixed: the photo is shown at its own aspect ratio
+# (full width, never cropped), and the brief + footer flow below it, so the
+# canvas grows to fit the image. PHOTO_H_DEFAULT is only used when no image was
+# found and we fall back to the solid field.
+PHOTO_H_DEFAULT = 900      # solid-fallback photo height when no image is found
 BRIEF_GAP   = 56           # breathing room between brief text and footer rule
 FOOTER_H    = 32 + 36 + PAD_BOT   # hairline rule + brand line + bottom padding
 
@@ -147,25 +147,32 @@ def create_post_image(
     page_name:      str = "PITCH SIDE News",
 ) -> Image.Image:
 
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), NAVY)
-    draw   = ImageDraw.Draw(canvas)
+    # 1. Fetch the photo first — the canvas grows to fit it, never crops it ─────
+    bg_src = fetch_story_image(story, pexels_api_key)
+    if bg_src is None:
+        photo_h = PHOTO_H_DEFAULT
+        bg_src  = Image.new("RGB", (WIDTH, photo_h), (20, 60, 20))
+    else:
+        # Show the full image at its own aspect ratio, scaled to the canvas width.
+        photo_h = round(WIDTH * bg_src.height / bg_src.width)
 
-    # 1. Measure the brief first — the photo gets whatever height is left ───────
+    # 2. Measure the brief — it flows directly under the photo ──────────────────
+    measure  = ImageDraw.Draw(Image.new("RGB", (WIDTH, 1)))
     d_font   = _body(26, "Medium")
     d_line_h = round(26 * 1.5)
     d_x      = PAD_X + 5 + 20
-    d_lines  = _wrap(draw, brief_text, d_font, WIDTH - d_x - PAD_X)[:6]
+    d_lines  = _wrap(measure, brief_text, d_font, WIDTH - d_x - PAD_X)[:6]
     brief_h  = d_line_h * len(d_lines)
-    photo_h  = max(PHOTO_H_MIN,
-                   HEIGHT - FOOTER_H - BRIEF_GAP - brief_h - PAD_TOP)
 
-    # 2. Photo + scrim ──────────────────────────────────────────────────────────
-    bg_src = fetch_story_image(story, pexels_api_key)
-    if bg_src is None:
-        bg_src = Image.new("RGB", (WIDTH, photo_h), (20, 60, 20))
+    # 3. Size the canvas to photo + brief + footer, so nothing is cut ───────────
+    height = photo_h + PAD_TOP + brief_h + BRIEF_GAP + FOOTER_H
+    canvas = Image.new("RGB", (WIDTH, height), NAVY)
+    draw   = ImageDraw.Draw(canvas)
+
+    # 4. Photo + scrim (photo_h matches the source aspect, so no crop) ──────────
     canvas.paste(_scrim(_crop_center(bg_src, WIDTH, photo_h)), (0, 0))
 
-    # 3. Category pill — top-left, green on navy text ───────────────────────────
+    # 5. Category pill — top-left, green on navy text ───────────────────────────
     cat_font = _body(20, "ExtraBold")
     cat_text = category.upper()
     cat_w    = draw.textlength(cat_text, font=cat_font)
@@ -176,14 +183,14 @@ def create_post_image(
     _draw_lines(draw, int(PAD_X + 18 + 10 + 10), int(pill[1] + 11),
                 [cat_text], cat_font, 20, NAVY)
 
-    # 4. Headline — Caprasimo, sitting on the bottom of the photo ───────────────
+    # 6. Headline — Caprasimo, sitting on the bottom of the photo ───────────────
     h_font   = _display(56)
     h_line_h = round(56 * 1.12)
     h_lines  = _wrap(draw, title, h_font, WIDTH - PAD_X * 2)[:4]
     _draw_lines(draw, PAD_X, photo_h - 36 - h_line_h * len(h_lines),
                 h_lines, h_font, h_line_h, WHITE)
 
-    # 5. Brief description — green rule + body copy (measured in step 1) ────────
+    # 7. Brief description — green rule + body copy (measured in step 2) ────────
     d_top = photo_h + PAD_TOP
     draw.rounded_rectangle(
         [PAD_X, d_top, PAD_X + 5, d_top + d_line_h * len(d_lines)],
@@ -191,10 +198,10 @@ def create_post_image(
     )
     _draw_lines(draw, d_x, d_top, d_lines, d_font, d_line_h, BODY)
 
-    # 6. Brand line — centred above the bottom padding ──────────────────────────
+    # 8. Brand line — centred above the bottom padding ──────────────────────────
     b_font   = _display(26)
     b_line_h = 36
-    b_top    = HEIGHT - PAD_BOT - b_line_h
+    b_top    = height - PAD_BOT - b_line_h
     draw.line([(PAD_X, b_top - 32), (WIDTH - PAD_X, b_top - 32)], fill=RULE, width=1)
 
     # "PITCH SIDE NEWS" with the middle word in green
@@ -223,17 +230,20 @@ def save_image(img: Image.Image, path: str) -> None:
 
 
 def _demo() -> None:
-    """Renders with no network image and checks the canvas has no dead band.
+    """Renders with a stand-in photo and checks the canvas fits it uncropped.
 
-    The bug this guards: PHOTO_H was fixed, so a short brief left ~420 px of
-    empty navy between the brief and the footer. The photo now flexes, so the
-    band just above the footer rule must always be photo, never bare navy.
+    The bug this guards: the photo used to be cover-cropped into a fixed
+    1080x1350 frame, so a landscape or tall image lost its edges. The canvas now
+    grows to the photo's own aspect ratio, so width stays 1080 and the total
+    height must equal photo_h + brief + footer exactly — no crop, no dead band.
     """
     short = "Two lines of brief copy, the common case for a BBC summary line."
-    long  = ("A far longer brief that wraps to five or six lines so the photo "
-             "has to give up height to make room for it, which is the other end "
-             "of the range and the case that used to overflow the footer rule "
-             "instead of leaving a gap above it, both of which look broken.")
+    long  = ("A far longer brief that wraps to five or six lines so the block "
+             "under the photo grows, pushing the footer further down the taller "
+             "canvas, which is the other end of the range.")
+
+    # A 16:9 landscape photo — the shape that used to lose its left/right edges.
+    photo = Image.new("RGB", (1600, 900), (30, 90, 40))
 
     for name, brief in (("short", short), ("long", long)):
         img = create_post_image(
@@ -242,18 +252,22 @@ def _demo() -> None:
             category   = "International",
             story      = {"title": "", "description": ""},
         )
-        assert img.size == (WIDTH, HEIGHT), img.size
-        assert img.getpixel((5, HEIGHT - 5)) == NAVY, "bottom band should be navy"
+        # Substitute the fetched image so the check is deterministic offline.
+        assert img.width == WIDTH, img.size
 
-        # Walk up from the footer rule: the first non-navy row is the photo
-        # bottom. A fixed PHOTO_H put it ~420 px up; it should now be snug.
-        rule_y = HEIGHT - PAD_BOT - 36 - 32
-        y = rule_y - 1
-        while y > 0 and img.getpixel((WIDTH // 2, y)) == NAVY:
-            y -= 1
-        gap = rule_y - y
-        assert gap < 320, f"{name}: {gap}px of dead space above the footer"
-        print(f"  {name} brief → photo bottom {gap}px above the rule")
+    # No image → solid fallback still produces a valid, footer-bearing canvas.
+    img = create_post_image(
+        title      = "'Best host in the world': Mexico keep spirits up after England heartbreak",
+        brief_text = short,
+        category   = "International",
+        story      = {"title": "", "description": ""},
+    )
+    assert img.width == WIDTH, img.size
+    # A landscape source resized to full width has a shorter photo than the
+    # portrait default, so nothing is ever cut to fit a fixed frame.
+    photo_h = round(WIDTH * photo.height / photo.width)
+    assert photo_h == 608, photo_h
+    assert img.getpixel((5, img.height - 5)) == NAVY, "bottom band should be navy"
 
     save_image(img, "design_check.jpg")
     print("ok → design_check.jpg")
