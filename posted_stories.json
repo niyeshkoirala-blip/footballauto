@@ -1,10 +1,5 @@
 {
   "posted": [
-    "e5e13b359ae901fb37abfd52c6d87055",
-    "7842dba5a02322079fabe9c9ea4071d6",
-    "c5bb7edc2336628c186b703448a152cc",
-    "dedb50ead58a53ded92c95096734f535",
-    "cebd835ebfe33aadf5cda68cd7e91901",
     "56254989ca63f683671ead2a6095bd40",
     "267dbda123accfbf36ba3b894a3c0380",
     "61aa09da54f5d213538b6db93d46cfa2",
@@ -999,12 +994,17 @@
     "fixture-401874744",
     "ddfa89e952477a1534ef3000513c86f7",
     "fixture-401879286",
-    "fixture-401874939"
+    "fixture-401874939",
+    "fixture-401884806",
+    "fixture-401884804",
+    "fixture-401884800",
+    "fixture-401884807",
+    "fixture-401884802"
   ],
   "daily": {
     "2026-09-03": 12,
     "2026-09-04": 12,
-    "2026-09-05": 3
+    "2026-09-05": 8
   },
   "reels": {}
 }
