@@ -1,9 +1,5 @@
 {
   "posted": [
-    "e82a2050ab5596664941cc70abf42086",
-    "5b6e01739961f7a9c05594c215eac3a9",
-    "c71504ad4733e3240f406e7266138a21",
-    "eeb9bba0b23c3cdbe70f976422268509",
     "718ef41c817a4dbcaadcd3cfdd54c5ba",
     "bbb89a2fce5a55db7fe1260e8dd102b6",
     "fb22d473ed556f2e016bc61f63ae9d2d",
@@ -999,12 +995,16 @@
     "fixture-401915444",
     "fixture-401915422",
     "4855adc1ab98b1bb9f114ada9e3ec2c0",
-    "3b391f523bf3cc51b272566b391b4b8a"
+    "3b391f523bf3cc51b272566b391b4b8a",
+    "fixture-401915443",
+    "fixture-401915441",
+    "fixture-401915442",
+    "fixture-401915440"
   ],
   "daily": {
     "2026-09-08": 12,
     "2026-09-09": 12,
-    "2026-09-10": 7
+    "2026-09-10": 11
   },
   "reels": {}
 }
