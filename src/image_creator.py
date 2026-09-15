@@ -18,7 +18,7 @@ Layout (matches the "Post Design" mockup):
 """
 
 import os
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from src.image_fetcher import fetch_story_image
 
@@ -79,29 +79,94 @@ def _body(size: int, weight: str = "Medium") -> ImageFont.FreeTypeFont:
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _crop_center(img: Image.Image, w: int, h: int) -> Image.Image:
+def _fit_contain(img: Image.Image, w: int, h: int) -> Image.Image:
+    """Fit the complete source inside the photo area without crop or distortion."""
+    if img.width <= 0 or img.height <= 0:
+        return Image.new("RGB", (w, h), NAVY)
+
+    scale = min(w / img.width, h / img.height)
+    nw = max(1, round(img.width * scale))
+    nh = max(1, round(img.height * scale))
+    resized = img.convert("RGB").resize((nw, nh), Image.Resampling.LANCZOS)
+    contained = Image.new("RGB", (w, h), NAVY)
+    contained.paste(resized, ((w - nw) // 2, (h - nh) // 2))
+    return contained
+
+
+def _cover_blurred(img: Image.Image, w: int, h: int) -> Image.Image:
+    """Create a blurred cover background; only this supporting layer may crop."""
     scale = max(w / img.width, h / img.height)
-    nw, nh = int(img.width * scale), int(img.height * scale)
-    img = img.resize((nw, nh), Image.LANCZOS)
-    left = (nw - w) // 2
-    top  = 0 if img.height > img.width * 1.1 else (nh - h) // 2
-    return img.crop((left, top, left + w, top + h))
+    nw = max(w, round(img.width * scale))
+    nh = max(h, round(img.height * scale))
+    resized = img.convert("RGB").resize((nw, nh), Image.Resampling.LANCZOS)
+    left, top = (nw - w) // 2, (nh - h) // 2
+    cropped = resized.crop((left, top, left + w, top + h))
+    return cropped.filter(ImageFilter.GaussianBlur(radius=max(14, round(min(w, h) * 0.025))))
 
 
-def _scrim(img: Image.Image) -> Image.Image:
-    """linear-gradient(180deg, transparent 45%, navy 0.85 at 88%, navy 100%)."""
+def _feathered_contain(img: Image.Image, w: int, h: int,
+                       fade_top: bool = False) -> Image.Image:
+    """Layer a complete sharp source over its blurred cover with soft edges."""
+    scale = min(w / img.width, h / img.height)
+    nw = max(1, round(img.width * scale))
+    nh = max(1, round(img.height * scale))
+    left = (w - nw) // 2
+    top = (h - nh) // 2
+    sharp = img.convert("RGB").resize((nw, nh), Image.Resampling.LANCZOS)
+    background = _cover_blurred(img, w, h)
+
+    mask = Image.new("L", (w, h), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rectangle((left, top, left + nw - 1, top + nh - 1), fill=255)
+    side_background = w - nw
+    feather = min(round(nw * 0.12), max(18, round(side_background * 0.20)))
+    if side_background:
+        for x in range(left, min(w, left + feather)):
+            mask_draw.line((x, top, x, top + nh - 1),
+                           fill=round(255 * (x - left) / max(1, feather)))
+        for x in range(max(0, left + nw - feather), left + nw):
+            mask_draw.line((x, top, x, top + nh - 1),
+                           fill=round(255 * (left + nw - x) / max(1, feather)))
+
+    if fade_top:
+        top_feather = max(24, round(nh * 0.22))
+        for y in range(top, min(h, top + top_feather)):
+            mask_draw.line((left, y, left + nw - 1, y),
+                           fill=round(255 * (y - top) / max(1, top_feather)))
+
+    foreground = Image.new("RGB", (w, h), NAVY)
+    foreground.paste(sharp, (left, top))
+    return Image.composite(foreground, background, mask)
+
+
+def _scrim(img: Image.Image, fade_top: bool = False,
+        content_top: int = 0, fade_sides: bool = False,
+        content_left: int = 0, content_width: int | None = None) -> Image.Image:
+    """Fade the lower edge and conditionally fade source-facing edges."""
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw    = ImageDraw.Draw(overlay)
     h       = img.height
+    content_width = content_width or img.width
+    content_right = content_left + content_width - 1
+    side_fade_width = max(1, round(content_width * 0.22))
     for y in range(h):
         t = y / (h - 1)
-        if t <= 0.45:
+        top_fade_end = content_top + round((h - content_top * 2) * 0.22)
+        if fade_top and content_top <= y <= top_fade_end:
+            a = 0.85 * (1 - (y - content_top) / max(1, top_fade_end - content_top))
+        elif t <= 0.45:
             a = 0.0
         elif t <= 0.88:
             a = 0.85 * (t - 0.45) / 0.43
         else:
             a = 0.85 + 0.15 * (t - 0.88) / 0.12
-        draw.line([(0, y), (img.width - 1, y)], fill=NAVY + (int(a * 255),))
+        for x in range(img.width):
+            side_a = 0.0
+            if fade_sides and content_left - side_fade_width <= x <= content_left:
+                side_a = 0.85 * (x - content_left + side_fade_width) / side_fade_width
+            elif fade_sides and content_right <= x <= content_right + side_fade_width:
+                side_a = 0.85 * (content_right + side_fade_width - x) / side_fade_width
+            draw.point((x, y), fill=NAVY + (int(max(a, side_a) * 255),))
     return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 
 
@@ -163,7 +228,18 @@ def create_post_image(
     bg_src = fetch_story_image(story, pexels_api_key)
     if bg_src is None:
         bg_src = Image.new("RGB", (WIDTH, photo_h), (20, 60, 20))
-    canvas.paste(_scrim(_crop_center(bg_src, WIDTH, photo_h)), (0, 0))
+    contained_bg = _feathered_contain(bg_src, WIDTH, photo_h,
+                                      fade_top=bg_src.width > bg_src.height)
+    scale = min(WIDTH / bg_src.width, photo_h / bg_src.height)
+    content_width = round(bg_src.width * scale)
+    content_top = (photo_h - round(bg_src.height * scale)) // 2
+    content_left = (WIDTH - content_width) // 2
+    canvas.paste(_scrim(
+        contained_bg,
+        fade_top=False,
+        content_top=content_top,
+        fade_sides=False,
+    ), (0, 0))
 
     # 3. Category pill — top-left, green on navy text ───────────────────────────
     cat_font = _body(20, "ExtraBold")

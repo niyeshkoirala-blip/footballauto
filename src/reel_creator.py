@@ -9,6 +9,9 @@ from pathlib import Path
 
 MOODS = {"happy", "energetic", "sad"}
 REEL_DURATION = 10
+REEL_GREEN = "0x39c66b"
+REEL_BLUE = "0x0f2038"
+REEL_BORDER_WIDTH = 10
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SONGS_DIR = PROJECT_ROOT / "songs"
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
@@ -83,7 +86,11 @@ def create_reel(image_path: str | Path, output_path: str | Path, song_path: str 
     video_filter = (
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,boxblur=35:10[background];"
-        "[0:v]scale=1040:1840:force_original_aspect_ratio=decrease[foreground];"
+        "[0:v]scale=1040:1840:force_original_aspect_ratio=decrease,"
+        f"drawbox=x=0:y=0:w=iw-1:h=ih-1:color={REEL_GREEN}@0.72:t={REEL_BORDER_WIDTH},"
+        f"drawbox=x={REEL_BORDER_WIDTH}:y={REEL_BORDER_WIDTH}:"
+        f"w=iw-{REEL_BORDER_WIDTH * 2 + 1}:h=ih-{REEL_BORDER_WIDTH * 2 + 1}:"
+        f"color={REEL_BLUE}@0.95:t={REEL_BORDER_WIDTH}[foreground];"
         "[background][foreground]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]"
     )
     command = [
