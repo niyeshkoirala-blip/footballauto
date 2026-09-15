@@ -30,18 +30,10 @@ from src.news_fetcher      import (explain_story, fetch_news, same_event,
 from src.match_fetcher     import fetch_matches
 from src.content_formatter import format_caption, format_image_brief
 from src.image_creator     import create_post_image, save_image
-<<<<<<< HEAD
-from src.webhook_poster    import post_via_webhook
-from src.graph_poster      import post_reel
-from src.reel_creator      import create_reel
-from src.story_tracker     import (behind_pace, is_posted, mark_posted,
-                                   mark_reel, posts_today, reels_today,
-                                   relaxed_threshold)
-=======
 from src.webhook_poster    import post_via_webhook, post_reel_via_webhook
 from src.reel_creator      import classify_mood, create_reel, select_song
-from src.story_tracker     import behind_pace, is_posted, mark_posted, posts_today
->>>>>>> c43bd64 (feat: add sequential reel publishing and webhook setup tests)
+from src.story_tracker     import (behind_pace, is_posted, mark_posted,
+                                   posts_today, relaxed_threshold)
 
 
 def _threshold() -> int:
