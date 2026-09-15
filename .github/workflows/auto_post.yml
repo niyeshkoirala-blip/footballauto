@@ -51,6 +51,7 @@ jobs:
           MAKE_REEL_WEBHOOK_URL:  ${{ secrets.MAKE_REEL_WEBHOOK_URL }}
           PEXELS_API_KEY:         ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL:             "openai/gpt-oss-20b"
           PAGE_NAME:              ${{ secrets.PAGE_NAME }}
           MAX_POSTS_PER_DAY:      "12"
           MIN_POSTS_PER_DAY:      "4"

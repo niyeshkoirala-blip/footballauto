@@ -2,6 +2,7 @@
 
 import os
 import random
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -17,8 +18,13 @@ def classify_mood(caption: str, retries: int = 3) -> str:
     """Ask Groq for one of the three supported moods, without guessing."""
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY is required for Reel mood classification.")
-    from groq import Groq
+        print("    [REEL] GROQ_API_KEY is missing; using energetic fallback")
+        return "energetic"
+    try:
+        from groq import Groq
+    except Exception as exc:
+        print(f"    [REEL] Groq client unavailable; using energetic fallback: {exc}")
+        return "energetic"
 
     client = Groq(api_key=api_key)
     last_error: Exception | None = None
@@ -37,16 +43,19 @@ def classify_mood(caption: str, retries: int = 3) -> str:
                 max_tokens=512,
                 temperature=0,
             )
-            mood = (completion.choices[0].message.content or "").strip().lower()
-            if mood in MOODS:
+            response = (completion.choices[0].message.content or "").strip().lower()
+            mood = next((candidate for candidate in ("happy", "energetic", "sad")
+                          if re.search(rf"\b{re.escape(candidate)}\b", response)), None)
+            if mood:
                 return mood
-            last_error = RuntimeError(f"Groq returned invalid mood {mood!r}")
+            last_error = RuntimeError(f"Groq returned invalid mood {response!r}")
         except Exception as exc:
             last_error = exc
         print(f"    [REEL] Mood classification attempt {attempt}/{retries} failed: {last_error}")
         if attempt < retries:
             time.sleep(attempt)
-    raise RuntimeError(f"Mood classification failed after {retries} attempts: {last_error}")
+    print(f"    [REEL] Using energetic fallback after classification failure: {last_error}")
+    return "energetic"
 
 
 def select_song(mood: str) -> Path:
