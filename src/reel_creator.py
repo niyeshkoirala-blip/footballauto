@@ -35,12 +35,16 @@ def classify_mood(caption: str, retries: int = 3) -> str:
                 # overridden without code changes if the account has another model.
                 model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
                 messages=[
-                    {"role": "user", "content": f"Football post to classify:\n{caption}"},
-                    {"role": "user", "content": "Is it happy energetic or sad answer only with one"},
+                    {"role": "system", "content": (
+                        "Classify the football post mood. "
+                        "Allowed outputs are exactly one lowercase word: happy, energetic, or sad. "
+                        "Return only that one word. No explanation, punctuation, quotes, or extra words."
+                    )},
+                    {"role": "user", "content": f"<football_post>\n{caption}\n</football_post>"},
                 ],
                 # Reasoning-capable Groq models consume part of this budget
                 # internally before emitting the required one-word response.
-                max_tokens=512,
+                max_tokens=256,
                 temperature=0,
             )
             response = (completion.choices[0].message.content or "").strip().lower()
