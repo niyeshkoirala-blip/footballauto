@@ -19,6 +19,7 @@ import random
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -29,12 +30,18 @@ from src.news_fetcher      import (explain_story, fetch_news, same_event,
 from src.match_fetcher     import fetch_matches
 from src.content_formatter import format_caption, format_image_brief
 from src.image_creator     import create_post_image, save_image
+<<<<<<< HEAD
 from src.webhook_poster    import post_via_webhook
 from src.graph_poster      import post_reel
 from src.reel_creator      import create_reel
 from src.story_tracker     import (behind_pace, is_posted, mark_posted,
                                    mark_reel, posts_today, reels_today,
                                    relaxed_threshold)
+=======
+from src.webhook_poster    import post_via_webhook, post_reel_via_webhook
+from src.reel_creator      import classify_mood, create_reel, select_song
+from src.story_tracker     import behind_pace, is_posted, mark_posted, posts_today
+>>>>>>> c43bd64 (feat: add sequential reel publishing and webhook setup tests)
 
 
 def _threshold() -> int:
@@ -55,9 +62,9 @@ def _gather(max_stories: int) -> list[dict]:
 
 
 def validate_config(dry_run: bool) -> None:
-    # Make.com is the only posting path now, so a missing webhook URL is fatal.
-    # Checked at startup rather than at the first post, so the daemon dies
-    # immediately instead of failing once a minute for five hours.
+    # A normal post is always the first publishing action. Reel configuration
+    # is intentionally checked only after that post succeeds, so a missing Reel
+    # account never prevents the existing photo pipeline from running.
     required = ["PEXELS_API_KEY", "MAKE_WEBHOOK_URL"]
     if dry_run:
         required = ["PEXELS_API_KEY"]
@@ -69,7 +76,8 @@ def validate_config(dry_run: bool) -> None:
         sys.exit(1)
 
 
-def _publish(story: dict, dry_run: bool, pexels_api_key: str, page_name: str) -> bool:
+def _publish(story: dict, dry_run: bool, pexels_api_key: str, page_name: str,
+             dry_run_output_dir: Path | None = None) -> bool:
     """Create image and post (or save locally for dry-run). Returns True on success."""
     print(f"📰  {story['title'][:70]}")
     print(f"    Category : {story['category']}")
@@ -90,54 +98,55 @@ def _publish(story: dict, dry_run: bool, pexels_api_key: str, page_name: str) ->
     )
 
     if dry_run:
-        out_path = "dry_run_output.jpg"
-        save_image(image, out_path)
-        print(f"    [DRY RUN] Image saved to {out_path} — skipping Facebook upload.")
-        # Still build the reel so you can preview it
-        print("🎬  Creating reel preview…")
-        if create_reel(out_path, "dry_run_reel.mp4"):
-            print("    [DRY RUN] Reel saved to dry_run_reel.mp4")
-    elif not (_reel_wanted(story) and _publish_reel(caption, image)):
-        print("📤  Posting to Facebook via Make.com…")
-        print(f"✅  {post_via_webhook(caption, image)}\n")
-
-    mark_posted(story["id"])
-    return True
-
-
-def _reel_wanted(story: dict) -> bool:
-    """Reels out-reach photo posts, but only the strongest story of the day is
-    worth the slot — and this needs a page token, since Make's free tier has no
-    operations to spare for video."""
-    if not (os.getenv("FB_PAGE_ID", "").strip()
-            and os.getenv("FB_PAGE_ACCESS_TOKEN", "").strip()):
-        return False
-    return (reels_today() < int(os.getenv("REELS_PER_DAY", "2"))
-            and story["score"] >= int(os.getenv("REEL_MIN_SCORE", "90")))
-
-
-def _publish_reel(caption: str, image) -> bool:
-    """Post the card as a Reel via the Graph API. False means the caller should
-    fall back to a photo post rather than drop the story entirely."""
-    tmp       = tempfile.gettempdir()
-    reel_src  = os.path.join(tmp, "reel_source.jpg")
-    reel_path = os.path.join(tmp, "reel.mp4")
-
-    save_image(image, reel_src)
-    print("🎬  Building reel…")
-    if not create_reel(reel_src, reel_path):
-        return False
-
+        output_dir = dry_run_output_dir or Path.cwd()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        image_path = output_dir / ("post.jpg" if dry_run_output_dir else "dry_run_output.jpg")
+    else:
+        image_path = Path(tempfile.gettempdir()) / f"football-{story['id']}.jpg"
+    reel_path = (image_path.parent / "reel.mp4") if dry_run_output_dir else image_path.with_suffix(".mp4")
     try:
-        print("📤  Posting Reel to Facebook (Graph API — no Make ops)…")
-        video_id = post_reel(caption, reel_path)
-    except Exception as exc:
-        print(f"    Reel failed: {exc}\n    Falling back to a photo post.")
-        return False
+        save_image(image, image_path)
+        if dry_run:
+            print(f"    [DRY RUN] Image saved to {image_path} — skipping post upload.")
+        else:
+            print("[POST] Publishing normal post…")
+            post_via_webhook(caption, image)
+            print("[POST] Published successfully")
+            mark_posted(story["id"])
 
-    mark_reel()
-    print(f"✅  Reel published (video {video_id})\n")
-    return True
+        _run_reel_pipeline(caption, image_path, reel_path, dry_run)
+        return True
+    except Exception as exc:
+        print(f"[POST] Failed: {exc}")
+        print("[REEL] SKIPPED — normal post was not published")
+        return False
+    finally:
+        if not dry_run:
+            for path in (image_path, reel_path):
+                path.unlink(missing_ok=True)
+
+
+def _run_reel_pipeline(caption: str, image_path: Path, reel_path: Path, dry_run: bool) -> None:
+    """The second half of the pipeline; errors never undo a successful post."""
+    print("[REEL] Starting Reel pipeline…")
+    try:
+        print("[REEL] Asking Groq AI for mood…")
+        mood = classify_mood(caption)
+        print(f"[REEL] Mood: {mood}")
+        song = select_song(mood)
+        print(f"[REEL] Song: {song.relative_to(Path.cwd()) if song.is_relative_to(Path.cwd()) else song}")
+        print("[REEL] Creating 10-second video…")
+        if not create_reel(image_path, reel_path, song):
+            raise RuntimeError("video generation failed")
+        if dry_run:
+            print(f"[REEL] [DRY RUN] Video saved to {reel_path}; upload skipped")
+            return
+        print("[REEL] Publishing…")
+        post_reel_via_webhook(caption, str(reel_path))
+        print("[REEL] Reel published successfully")
+    except Exception as exc:
+        print(f"[REEL] Failed: {exc}")
+        print("[PIPELINE] Post succeeded, Reel failed")
 
 
 def _publication_order(stories: list[dict]) -> list[dict]:

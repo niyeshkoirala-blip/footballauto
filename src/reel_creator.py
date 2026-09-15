@@ -1,170 +1,91 @@
-"""
-Creates a 10-second Facebook Reel video from the post image.
+"""Create a ten-second, 9:16 Reel from a completed football post image."""
 
-Layout: 1080×1920 (9:16 vertical)
-  ┌──────────────────┐
-  │ blurred image bg │  ← full canvas, boxblur fill
-  │   ┌──────────┐   │
-  │   │ original │   │  ← sharp 1060×1060 centered
-  │   │  image   │   │
-  │   └──────────┘   │
-  │                  │
-  └──────────────────┘
-
-Background music: funky groove generated offline with Python's wave module
-(kick drum, snare, hi-hat, G-minor bass line — no downloads, no API keys needed).
-Drop your own .mp3 / .wav files into the music/ folder to override with real tracks.
-"""
-
-import math
+import os
 import random
-import struct
-import subprocess  # used by create_reel (ffmpeg)
-import wave as _wave
+import subprocess
+import time
 from pathlib import Path
 
-MUSIC_DIR     = Path("music")
-REEL_DURATION = 10   # seconds
+MOODS = {"happy", "energetic", "sad"}
+REEL_DURATION = 10
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SONGS_DIR = PROJECT_ROOT / "songs"
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 
 
-# ── Funky beat generator ───────────────────────────────────────────────────────
+def classify_mood(caption: str, retries: int = 3) -> str:
+    """Ask Groq for one of the three supported moods, without guessing."""
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is required for Reel mood classification.")
+    from groq import Groq
 
-def _generate_funky_beat(path: str, duration: int = 15) -> bool:
-    """
-    Synthesise a drum-machine + bass-line groove and write it as a WAV file.
-    BPM: 108  |  Key: G minor pentatonic  |  Pure Python — zero dependencies.
-    """
-    RATE  = 44100
-    BPM   = 108
-    step  = int(RATE * 60 / BPM / 4)   # samples per 16th note
-
-    def kick(j: int) -> float:
-        t = j / RATE
-        freq = 80 * math.exp(-t * 8)
-        return math.exp(-t * 10) * math.sin(2 * math.pi * freq * t) * 0.85
-
-    def snare(j: int) -> float:
-        t = j / RATE
-        return math.exp(-t * 20) * (random.random() * 2 - 1) * 0.55
-
-    def hat(j: int, closed: bool = True) -> float:
-        t = j / RATE
-        return math.exp(-t * (40 if closed else 8)) * (random.random() * 2 - 1) * 0.28
-
-    def bass(j: int, freq: float) -> float:
-        t = j / RATE
-        env = min(1.0, t * 120) * math.exp(-t * 4)
-        return env * (
-            math.sin(2 * math.pi * freq * t) * 0.55
-            + math.sin(2 * math.pi * freq * 2 * t) * 0.28
-            + math.sin(2 * math.pi * freq * 3 * t) * 0.10
-        ) * 0.45
-
-    # 16-step patterns (one bar of 4/4)
-    kicks  = [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0]
-    snares = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]
-    hats   = [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,1]
-    # G minor pentatonic: G2=98 Hz, Bb2=117, C3=131, D3=147
-    basses = [98,0,0,131, 98,0,117,0, 131,0,0,147, 98,0,0,0]
-
-    total   = RATE * duration
-    out     = [0.0] * total
-    bar_len = step * 16
-
-    for bar_start in range(0, total, bar_len):
-        for si in range(16):
-            s0 = bar_start + si * step
-            for j in range(step):
-                idx = s0 + j
-                if idx >= total:
-                    break
-                v = 0.0
-                if kicks[si]:
-                    v += kick(j)
-                if snares[si]:
-                    v += snare(j)
-                if hats[si]:
-                    v += hat(j)
-                if basses[si]:
-                    v += bass(j, basses[si])
-                out[idx] += v
-
-    peak  = max(abs(s) for s in out) or 1.0
-    scale = min(0.95, 0.78 / peak)
-    data  = struct.pack(f"<{total}h", *(int(s * scale * 32767) for s in out))
-
-    with _wave.open(path, "w") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(RATE)
-        wf.writeframes(data)
-    return True
+    client = Groq(api_key=api_key)
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            completion = client.chat.completions.create(
+                # gpt-oss-20b is currently available through Groq and can be
+                # overridden without code changes if the account has another model.
+                model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+                messages=[
+                    {"role": "user", "content": f"Football post to classify:\n{caption}"},
+                    {"role": "user", "content": "Is it happy energetic or sad answer only with one"},
+                ],
+                # Reasoning-capable Groq models consume part of this budget
+                # internally before emitting the required one-word response.
+                max_tokens=512,
+                temperature=0,
+            )
+            mood = (completion.choices[0].message.content or "").strip().lower()
+            if mood in MOODS:
+                return mood
+            last_error = RuntimeError(f"Groq returned invalid mood {mood!r}")
+        except Exception as exc:
+            last_error = exc
+        print(f"    [REEL] Mood classification attempt {attempt}/{retries} failed: {last_error}")
+        if attempt < retries:
+            time.sleep(attempt)
+    raise RuntimeError(f"Mood classification failed after {retries} attempts: {last_error}")
 
 
-def _pick_track() -> Path | None:
-    """
-    Return a music file to use.
-    Priority: user-added files in music/ → generated funky beat.
-    """
-    MUSIC_DIR.mkdir(exist_ok=True)
-    user_tracks = list(MUSIC_DIR.glob("*.mp3")) + list(MUSIC_DIR.glob("*.wav"))
-    if user_tracks:
-        return random.choice(user_tracks)
-
-    generated = MUSIC_DIR / "funky_beat.wav"
-    if not generated.exists():
-        print("  [reel] Generating funky groove track…")
-        _generate_funky_beat(str(generated), duration=20)
-        print(f"  [reel] Beat generated → {generated}")
-    return generated
+def select_song(mood: str) -> Path:
+    """Select an audio file only from the requested mood directory."""
+    mood = mood.strip().lower()
+    if mood not in MOODS:
+        raise ValueError(f"Unsupported Reel mood: {mood!r}")
+    folder = SONGS_DIR / mood
+    songs = ([path for path in folder.iterdir()
+              if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS]
+             if folder.is_dir() else [])
+    if not songs:
+        raise RuntimeError(f"No supported audio files found in {folder} for mood '{mood}'.")
+    return random.choice(songs)
 
 
-def create_reel(image_path: str, output_path: str = "reel_output.mp4") -> bool:
-    """
-    Build a 10-second 1080×1920 Reel MP4 from a JPEG image.
-    Returns True on success.
-    """
-    # Blurred image fills the vertical canvas; sharp image sits centred on top
-    vf = (
+def create_reel(image_path: str | Path, output_path: str | Path, song_path: str | Path) -> bool:
+    """Build a 1080x1920 MP4 with a preserved card and looping audio."""
+    image_path, output_path, song_path = map(Path, (image_path, output_path, song_path))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    video_filter = (
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,boxblur=35:10[bg];"
-        "[0:v]scale=1060:1060[fg];"
-        "[bg][fg]overlay=(W-w)/2:(H-h)/2[out]"
+        "crop=1080:1920,boxblur=35:10[background];"
+        "[0:v]scale=1040:1840:force_original_aspect_ratio=decrease[foreground];"
+        "[background][foreground]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]"
     )
-
-    track = _pick_track()
-
-    if track:
-        cmd = [
-            "ffmpeg", "-y",
-            "-loop", "1", "-i", image_path,
-            "-i", str(track),
-            "-filter_complex", vf,
-            "-map", "[out]", "-map", "1:a",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-t", str(REEL_DURATION),
-            "-c:a", "aac", "-b:a", "128k", "-shortest",
-            output_path,
-        ]
-        print(f"  [reel] Building reel with track: {track.stem}")
-    else:
-        # No music available — silent reel still works
-        cmd = [
-            "ffmpeg", "-y",
-            "-loop", "1", "-i", image_path,
-            "-filter_complex", vf,
-            "-map", "[out]",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-t", str(REEL_DURATION),
-            output_path,
-        ]
-        print("  [reel] No music tracks found — building silent reel")
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"  [reel] ffmpeg failed:\n{result.stderr[-600:]}")
+    command = [
+        "ffmpeg", "-y", "-loop", "1", "-i", str(image_path),
+        "-stream_loop", "-1", "-i", str(song_path),
+        "-filter_complex", video_filter, "-map", "[out]", "-map", "1:a:0",
+        "-t", str(REEL_DURATION), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output_path),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        print("    [REEL] ffmpeg is not installed.")
         return False
-
-    size_kb = Path(output_path).stat().st_size // 1024
-    print(f"  [reel] Created {output_path} ({size_kb} KB)")
-    return True
+    if result.returncode:
+        print(f"    [REEL] ffmpeg failed: {result.stderr[-600:]}")
+        return False
+    return output_path.exists() and output_path.stat().st_size > 0

@@ -33,6 +33,9 @@ supplies ~12 qualifying stories/day, so the relaxation does engage.
 
 Each post is a branded 1080×1350 image with the headline overlaid, plus an
 AI-written caption (hook, context, fan question, hashtags, source credit).
+After the normal post is confirmed, the same image and exact caption are made
+into a 10-second Reel and published through the Reel webhook. A failed Reel
+never removes or retries the successful normal post.
 
 ---
 
@@ -112,6 +115,9 @@ nano .env
 MAKE_WEBHOOK_URL=https://hook.eu2.make.com/xxxxxxxx
 PEXELS_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 
+# Required for post-matched Reels
+MAKE_REEL_WEBHOOK_URL=https://hook.../reel-a,https://hook.../reel-b
+
 # Optional
 GROQ_API_KEY=gsk_xxxxx...
 PAGE_NAME=FOOTBALL NEWS
@@ -143,7 +149,24 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Six packages, no browser download.
+FFmpeg is also required for Reel generation:
+
+```bash
+sudo apt-get install ffmpeg       # Ubuntu/Debian
+```
+
+GitHub Actions installs it automatically.
+
+Place licensed audio files in exactly one matching mood folder:
+
+```text
+songs/happy/
+songs/energetic/
+songs/sad/
+```
+
+The Reel classifier accepts only `happy`, `energetic`, or `sad`, and only picks
+audio from that category's folder. Short tracks loop; long tracks are trimmed.
 
 ---
 
@@ -161,14 +184,31 @@ python main.py --preview 30    # top 30
 ```bash
 python main.py --dry-run
 xdg-open dry_run_output.jpg
+
+# Random current article, full POST → REEL sequence without uploads
+python3 test_run/make.py --dry-run
 ```
 
 ### Live
 
 ```bash
-python main.py            # one pass
+python3 make.py           # one pass
 python main.py --daemon   # continuous, this is what CI runs
 ```
+
+### Verify a Make webhook before adding it to GitHub Secrets
+
+These isolated setup checks send fake, clearly labelled content through the
+same multipart request and response validation as the production publishers.
+They do not read RSS, update `posted_stories.json`, or rotate accounts.
+
+```bash
+python3 sendpostdata.py https://your-post-webhook
+python3 sendreeldata.py https://your-reel-webhook
+```
+
+The Reel check creates a temporary 10-second vertical MP4 and deletes all
+temporary files after the request. Both commands require FFmpeg.
 
 ---
 

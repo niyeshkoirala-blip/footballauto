@@ -64,12 +64,14 @@ def _groq_caption(story: dict, api_key: str) -> str | None:
             # 70B is on the same free tier as the 8B-instant model this used to
             # call, and writes noticeably better captions. If Groq retires it,
             # `GET /openai/v1/models` lists what the key can still reach.
-            model="llama-3.3-70b-versatile",
+            model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
             messages=[{"role": "user", "content": prompt}],
             max_tokens=600,
             temperature=0.75,
         )
-        caption = completion.choices[0].message.content.strip()
+        caption = (completion.choices[0].message.content or "").strip()
+        if not caption:
+            return None
         return caption + f"\n\n📰 Source: {story['source']}"
     except Exception as e:
         print(f"  [content_formatter] Groq error (using fallback): {e}")
