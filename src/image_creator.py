@@ -106,7 +106,7 @@ def _cover_blurred(img: Image.Image, w: int, h: int) -> Image.Image:
 
 def _feathered_contain(img: Image.Image, w: int, h: int,
                        fade_top: bool = False) -> Image.Image:
-    """Layer a complete sharp source over its blurred cover with soft edges."""
+    """Layer a sharp source over its blurred cover without any edge fade."""
     scale = min(w / img.width, h / img.height)
     nw = max(1, round(img.width * scale))
     nh = max(1, round(img.height * scale))
@@ -118,21 +118,6 @@ def _feathered_contain(img: Image.Image, w: int, h: int,
     mask = Image.new("L", (w, h), 0)
     mask_draw = ImageDraw.Draw(mask)
     mask_draw.rectangle((left, top, left + nw - 1, top + nh - 1), fill=255)
-    side_background = w - nw
-    feather = min(round(nw * 0.12), max(18, round(side_background * 0.20)))
-    if side_background:
-        for x in range(left, min(w, left + feather)):
-            mask_draw.line((x, top, x, top + nh - 1),
-                           fill=round(255 * (x - left) / max(1, feather)))
-        for x in range(max(0, left + nw - feather), left + nw):
-            mask_draw.line((x, top, x, top + nh - 1),
-                           fill=round(255 * (left + nw - x) / max(1, feather)))
-
-    if fade_top:
-        top_feather = max(24, round(nh * 0.22))
-        for y in range(top, min(h, top + top_feather)):
-            mask_draw.line((left, y, left + nw - 1, y),
-                           fill=round(255 * (y - top) / max(1, top_feather)))
 
     foreground = Image.new("RGB", (w, h), NAVY)
     foreground.paste(sharp, (left, top))
@@ -228,8 +213,7 @@ def create_post_image(
     bg_src = fetch_story_image(story, pexels_api_key)
     if bg_src is None:
         bg_src = Image.new("RGB", (WIDTH, photo_h), (20, 60, 20))
-    contained_bg = _feathered_contain(bg_src, WIDTH, photo_h,
-                                      fade_top=bg_src.width > bg_src.height)
+    contained_bg = _feathered_contain(bg_src, WIDTH, photo_h)
     scale = min(WIDTH / bg_src.width, photo_h / bg_src.height)
     content_width = round(bg_src.width * scale)
     content_top = (photo_h - round(bg_src.height * scale)) // 2

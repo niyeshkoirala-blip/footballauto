@@ -59,6 +59,22 @@ def test_extreme_source_ratios_remain_contained(size):
     assert expected_size[0] / expected_size[1] == pytest.approx(size[0] / size[1], rel=0.01)
 
 
+def test_create_post_image_keeps_only_bottom_scrim_fade():
+    source = _wide_fixture()
+
+    with patch.object(image_creator, "fetch_story_image", return_value=source):
+        with patch.object(image_creator, "_feathered_contain", wraps=image_creator._feathered_contain) as feathered:
+            image_creator.create_post_image(
+                title="TOP FADES SHOULD BE OFF",
+                brief_text="A wide test image should not add edge feathering.",
+                category="International",
+                story={"title": "", "description": ""},
+                page_name="TEST PAGE",
+            )
+
+    assert not feathered.call_args.kwargs
+
+
 def test_side_fade_starts_at_two_to_one_portrait_threshold():
     source = Image.new("RGB", (1080, 1072), "#2468a8")
     threshold = image_creator._scrim(
