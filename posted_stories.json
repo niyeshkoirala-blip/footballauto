@@ -1,6 +1,5 @@
 {
   "posted": [
-    "d41f16aa1a91e9e1d8725e238125a87c",
     "fixture-401882908",
     "8deeb6ad8ded8e4b778acd31d6ee48cf",
     "result-401882908",
@@ -999,12 +998,13 @@
     "a76f5197142949dd919424e2584b93a3",
     "daedab8c5ffa9f9b8ddf85ca99a432e0",
     "c0bf25149bce9bfdc7e4512d8e8617ff",
-    "5fdf056280de53d11cf304daba60a5b8"
+    "5fdf056280de53d11cf304daba60a5b8",
+    "edfed1fb98425a6bed4fc827eedefeab"
   ],
   "daily": {
     "2026-11-22": 12,
     "2026-11-23": 12,
-    "2026-11-24": 1
+    "2026-11-24": 2
   },
   "reels": {}
 }
